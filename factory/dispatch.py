@@ -63,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
             print("Ignoring pull_request issue-opened event")
             return 0
         ensure_branch(DEV_BRANCH, MAIN_BRANCH)
+        if skip_dev_if_feature_pr_open(owner_repo, issue["number"]):
+            return 0
         return launch_role(
             owner_repo,
             repo_url,
@@ -268,6 +270,8 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
 
     if role == "dev":
         ensure_branch(DEV_BRANCH, MAIN_BRANCH)
+        if not is_pr and skip_dev_if_feature_pr_open(owner_repo, number):
+            return 0
 
     html_url = target.get("html_url") or (
         f"{repo_url}/{'pull' if is_pr else 'issues'}/{number}"
@@ -622,6 +626,47 @@ def build_prompt(
         f"{extra_block}\n"
         f"{body.strip() or '(no description)'}\n"
     )
+
+
+def open_feature_pr_into_dev(owner_repo: str) -> dict | None:
+    prs = gh_json(
+        [
+            "pr",
+            "list",
+            "--repo",
+            owner_repo,
+            "--base",
+            DEV_BRANCH,
+            "--state",
+            "open",
+            "--json",
+            "number,headRefName,url",
+        ]
+    )
+    for pr in prs:
+        head = pr.get("headRefName") or ""
+        if head.startswith("feature/"):
+            return pr
+    return None
+
+
+def skip_dev_if_feature_pr_open(owner_repo: str, issue_number: int) -> bool:
+    blocking = open_feature_pr_into_dev(owner_repo)
+    if blocking is None:
+        return False
+    url = blocking.get("url") or ""
+    number = blocking.get("number")
+    ref = blocking.get("headRefName") or "feature/…"
+    detail = f"{url}" if url else f"PR #{number} (`{ref}`)"
+    post_comment(
+        owner_repo,
+        issue_number,
+        "Dev agent was not started because there is already an open feature PR into "
+        f"`{DEV_BRANCH}`: {detail}\n\n"
+        f"Merge that PR first, then add the `agent-dev` label on this issue to retry.",
+    )
+    print(f"Skipping dev launch for issue #{issue_number}; open feature PR {detail}")
+    return True
 
 
 def feature_branch_name(number: int, title: str) -> str:
