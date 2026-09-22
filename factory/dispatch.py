@@ -16,6 +16,15 @@ from pathlib import Path
 
 from cursor_sdk import Agent, CloudAgentOptions, CloudRepository, CursorAgentError
 
+from status_labels import (
+    apply_factory_status_for_launch,
+    ensure_factory_status_labels,
+    issue_number_for_test_to_main_promotion,
+    issue_number_from_branch,
+    mark_issues_waiting_main_done,
+    set_factory_status,
+)
+
 FACTORY_ROOT = Path(__file__).resolve().parent
 PROMPTS_DIR = FACTORY_ROOT / "prompts"
 CI_SCRIPT = FACTORY_ROOT / "run_ci.sh"
@@ -47,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
     repo_url = f"{server}/{owner_repo}"
     owner = owner_repo.split("/", 1)[0]
+    ensure_factory_status_labels(owner_repo)
 
     if args.role and args.pr:
         return launch_role_on_pr(owner_repo, repo_url, args.role, args.pr)
@@ -90,9 +100,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         base = pr.get("base", {}).get("ref") or ""
         if base == DEV_BRANCH:
-            return promote_dev_to_test(owner_repo, repo_url, owner, pr)
+            head_ref = pr.get("headRefName") or (pr.get("head") or {}).get("ref") or ""
+            merged = {**pr, "headRefName": head_ref}
+            return promote_dev_to_test(owner_repo, repo_url, owner, merged)
         if base == TEST_BRANCH:
             return promote_test_to_main(owner_repo, repo_url, owner)
+        if base == MAIN_BRANCH:
+            mark_issues_waiting_main_done(owner_repo)
+            print(f"Merged PR #{pr['number']} into {MAIN_BRANCH}; marked factory-done")
+            return 0
         print(f"Merged PR is not into {DEV_BRANCH} or {TEST_BRANCH}; ignoring")
         return 0
 
@@ -106,9 +122,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-FEATURE_BRANCH_RE = re.compile(r"^feature/(\d+)(?:-|$)")
-
-
 def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict) -> int:
     ref = event.get("ref") or ""
     prefix = "refs/heads/"
@@ -120,11 +133,10 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
         print(f"Ignoring push to {branch}")
         return 0
 
-    match = FEATURE_BRANCH_RE.match(branch)
-    if not match:
+    issue_number = issue_number_from_branch(branch)
+    if issue_number is None:
         print(f"Feature branch {branch} has no leading issue number; ignoring")
         return 0
-    issue_number = int(match.group(1))
 
     existing = gh_json(
         [
@@ -363,6 +375,9 @@ def handle_test_fail(owner_repo: str, repo_url: str, number: int) -> int:
                 "Test reported FAIL, but **Fixer** already ran for this PR. "
                 "Not launching another Fixer. Add the `agent-fix` label to retry Fixer.",
             )
+            blocked_issue = issue_number_from_branch(head)
+            if blocked_issue is not None:
+                set_factory_status(owner_repo, blocked_issue, "factory-blocked")
             print(f"Fixer marker already present on PR #{number}; skipping")
             return 0
         print(f"Test FAIL on feature PR #{number}; launching Fixer")
@@ -570,7 +585,14 @@ def promote_dev_to_test(owner_repo: str, repo_url: str, owner: str, merged_pr: d
             f"Nothing to promote from `{DEV_BRANCH}` to `{TEST_BRANCH}` (branches are even).",
         )
         return 0
-    return launch_role_on_pr(owner_repo, repo_url, "test", pr_number)
+    factory_issue = issue_number_from_branch(merged_pr.get("headRefName") or "")
+    return launch_role_on_pr(
+        owner_repo,
+        repo_url,
+        "test",
+        pr_number,
+        factory_issue_number=factory_issue,
+    )
 
 
 def promote_test_to_main(owner_repo: str, repo_url: str, owner: str) -> int:
@@ -592,7 +614,14 @@ def promote_test_to_main(owner_repo: str, repo_url: str, owner: str) -> int:
     if pr_number is None:
         print("Nothing to promote from test to main")
         return 0
-    return launch_role_on_pr(owner_repo, repo_url, "test", pr_number)
+    factory_issue = issue_number_for_test_to_main_promotion(owner_repo)
+    return launch_role_on_pr(
+        owner_repo,
+        repo_url,
+        "test",
+        pr_number,
+        factory_issue_number=factory_issue,
+    )
 
 
 def ensure_promotion_pr(
@@ -674,6 +703,7 @@ def launch_role_on_pr(
     marker: str | None = None,
     idempotency_key: str | None = None,
     force: bool = False,
+    factory_issue_number: int | None = None,
 ) -> int:
     pr = gh_json(
         ["pr", "view", str(pr_number), "--repo", owner_repo, "--json", "number,title,body,url"]
@@ -690,6 +720,7 @@ def launch_role_on_pr(
         marker=marker,
         idempotency_key=idempotency_key,
         force=force,
+        factory_issue_number=factory_issue_number,
     )
 
 
@@ -722,6 +753,7 @@ def launch_role(
     marker: str | None = None,
     idempotency_key: str | None = None,
     force: bool = False,
+    factory_issue_number: int | None = None,
 ) -> int:
     api_key = os.environ.get("CURSOR_API_KEY", "").strip()
     if not api_key:
@@ -770,6 +802,13 @@ def launch_role(
 
     print(f"launched agent_id={agent_id} run_id={run_id} role={role} number={number}")
     post_comment(owner_repo, number, launch_comment(marker, role, agent_id, run_id))
+    apply_factory_status_for_launch(
+        owner_repo,
+        role,
+        number=number,
+        is_pr=is_pr,
+        factory_issue_number=factory_issue_number,
+    )
     return 0
 
 
@@ -941,8 +980,7 @@ def remove_issue_label(owner_repo: str, issue_number: int, label: str) -> None:
 
 def queue_issue_for_factory(owner_repo: str, issue: dict) -> int:
     number = issue["number"]
-    ensure_factory_queued_label(owner_repo)
-    add_issue_label(owner_repo, number, FACTORY_QUEUED_LABEL)
+    set_factory_status(owner_repo, number, FACTORY_QUEUED_LABEL)
     post_comment(
         owner_repo,
         number,
@@ -998,8 +1036,6 @@ def handle_start_factory(owner_repo: str, repo_url: str) -> int:
         html_url=html_url,
         is_pr=False,
     )
-    if rc == 0:
-        remove_issue_label(owner_repo, number, FACTORY_QUEUED_LABEL)
     return rc
 
 
