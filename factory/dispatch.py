@@ -34,6 +34,7 @@ PASS_MARKER = "<!-- factory:test-result:pass -->"
 FAIL_MARKER = "<!-- factory:test-result:fail -->"
 PROMOTE_DEV_TO_TEST = "<!-- factory:promote:dev-to-test -->"
 PROMOTE_TEST_TO_MAIN = "<!-- factory:promote:test-to-main -->"
+FACTORY_QUEUED_LABEL = "factory-queued"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,13 +51,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.role and args.pr:
         return launch_role_on_pr(owner_repo, repo_url, args.role, args.pr)
 
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    factory_command = os.environ.get("FACTORY_COMMAND", "").strip().lower()
+    if factory_command == "start" or event_name == "workflow_dispatch":
+        return handle_start_factory(owner_repo, repo_url)
+
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if not event_path:
         print("GITHUB_EVENT_PATH is not set", file=sys.stderr)
         return 1
 
     event = json.loads(Path(event_path).read_text(encoding="utf-8"))
-    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     action = event.get("action") or ""
 
     if event_name == "issues" and action == "opened":
@@ -64,19 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         if issue.get("pull_request"):
             print("Ignoring pull_request issue-opened event")
             return 0
-        ensure_branch(DEV_BRANCH, MAIN_BRANCH)
-        if skip_dev_if_feature_pr_open(owner_repo, issue["number"]):
-            return 0
-        return launch_role(
-            owner_repo,
-            repo_url,
-            "dev",
-            number=issue["number"],
-            title=issue.get("title") or "",
-            body=issue.get("body") or "",
-            html_url=issue.get("html_url") or f"{repo_url}/issues/{issue['number']}",
-            is_pr=False,
-        )
+        return queue_issue_for_factory(owner_repo, issue)
 
     if event_name in {"issues", "pull_request"} and action == "labeled":
         return handle_label(owner_repo, repo_url, event)
@@ -871,6 +864,143 @@ def build_prompt(
         f"{extra_block}\n"
         f"{body.strip() or '(no description)'}\n"
     )
+
+
+def ensure_factory_queued_label(owner_repo: str) -> None:
+    result = subprocess.run(
+        [
+            "gh",
+            "label",
+            "create",
+            FACTORY_QUEUED_LABEL,
+            "--repo",
+            owner_repo,
+            "--color",
+            "C5DEF5",
+            "--description",
+            "Waiting in the factory queue",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        combined = (result.stdout or "") + (result.stderr or "")
+        if "already exists" not in combined.lower():
+            result.check_returncode()
+
+
+def add_issue_label(owner_repo: str, issue_number: int, label: str) -> None:
+    result = subprocess.run(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(issue_number),
+            "--repo",
+            owner_repo,
+            "--add-label",
+            label,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        combined = (result.stdout or "") + (result.stderr or "")
+        print(
+            f"Could not add label {label!r} to issue #{issue_number}: {combined.strip()}",
+            file=sys.stderr,
+        )
+        result.check_returncode()
+    print(f"Added label {label!r} to issue #{issue_number}")
+
+
+def remove_issue_label(owner_repo: str, issue_number: int, label: str) -> None:
+    result = subprocess.run(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(issue_number),
+            "--repo",
+            owner_repo,
+            "--remove-label",
+            label,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        combined = (result.stdout or "") + (result.stderr or "")
+        print(
+            f"Could not remove label {label!r} from issue #{issue_number}: {combined.strip()}",
+            file=sys.stderr,
+        )
+        result.check_returncode()
+    print(f"Removed label {label!r} from issue #{issue_number}")
+
+
+def queue_issue_for_factory(owner_repo: str, issue: dict) -> int:
+    number = issue["number"]
+    ensure_factory_queued_label(owner_repo)
+    add_issue_label(owner_repo, number, FACTORY_QUEUED_LABEL)
+    post_comment(
+        owner_repo,
+        number,
+        "This issue is **queued** for the factory. Dev does not start automatically.\n\n"
+        "Run **Start factory** from GitHub Actions "
+        "(Actions → **Start factory** → **Run workflow**) to begin work on the oldest queued issue.",
+    )
+    print(f"Queued issue #{number} with label {FACTORY_QUEUED_LABEL!r}")
+    return 0
+
+
+def oldest_queued_issue(owner_repo: str) -> dict | None:
+    issues = gh_json(
+        [
+            "issue",
+            "list",
+            "--repo",
+            owner_repo,
+            "--label",
+            FACTORY_QUEUED_LABEL,
+            "--state",
+            "open",
+            "--json",
+            "number,title,body,url",
+            "--limit",
+            "500",
+        ]
+    )
+    if not issues:
+        return None
+    return min(issues, key=lambda item: item["number"])
+
+
+def handle_start_factory(owner_repo: str, repo_url: str) -> int:
+    issue = oldest_queued_issue(owner_repo)
+    if issue is None:
+        print("No issues in factory queue (no open issues with factory-queued label)")
+        return 0
+
+    ensure_branch(DEV_BRANCH, MAIN_BRANCH)
+    number = issue["number"]
+    if skip_dev_if_feature_pr_open(owner_repo, number):
+        return 0
+
+    html_url = issue.get("url") or f"{repo_url}/issues/{number}"
+    rc = launch_role(
+        owner_repo,
+        repo_url,
+        "dev",
+        number=number,
+        title=issue.get("title") or "",
+        body=issue.get("body") or "",
+        html_url=html_url,
+        is_pr=False,
+    )
+    if rc == 0:
+        remove_issue_label(owner_repo, number, FACTORY_QUEUED_LABEL)
+    return rc
 
 
 def open_feature_pr_into_dev(owner_repo: str) -> dict | None:
