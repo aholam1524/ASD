@@ -22,10 +22,8 @@ class TestQueueIssueOnOpen:
             "html_url": "https://github.com/o/r/issues/42",
         }
         with patch.object(
-            dispatch, "ensure_factory_queued_label"
-        ) as ensure_mock, patch.object(
-            dispatch, "add_issue_label"
-        ) as label_mock, patch.object(
+            dispatch, "set_factory_status"
+        ) as status_mock, patch.object(
             dispatch, "post_comment"
         ) as comment_mock, patch.object(
             dispatch, "launch_role"
@@ -33,8 +31,7 @@ class TestQueueIssueOnOpen:
             rc = queue_issue_for_factory("o/r", issue)
 
         assert rc == 0
-        ensure_mock.assert_called_once_with("o/r")
-        label_mock.assert_called_once_with("o/r", 42, FACTORY_QUEUED_LABEL)
+        status_mock.assert_called_once_with("o/r", 42, FACTORY_QUEUED_LABEL)
         comment_mock.assert_called_once()
         assert "Start factory" in comment_mock.call_args[0][2]
         launch_mock.assert_not_called()
@@ -75,15 +72,12 @@ class TestHandleStartFactory:
             dispatch, "open_feature_pr_into_dev", return_value=None
         ), patch.object(
             dispatch, "launch_role", return_value=0
-        ) as launch_mock, patch.object(
-            dispatch, "remove_issue_label"
-        ) as remove_mock:
+        ) as launch_mock:
             rc = handle_start_factory("o/r", "https://github.com/o/r")
 
         assert rc == 0
         launch_mock.assert_called_once()
         assert launch_mock.call_args.kwargs["number"] == 7
-        remove_mock.assert_called_once_with("o/r", 7, FACTORY_QUEUED_LABEL)
 
     def test_skips_when_feature_pr_open(self) -> None:
         issue = {
@@ -96,11 +90,8 @@ class TestHandleStartFactory:
             dispatch, "oldest_queued_issue", return_value=issue
         ), patch.object(dispatch, "ensure_branch"), patch.object(
             dispatch, "skip_dev_if_feature_pr_open", return_value=True
-        ), patch.object(dispatch, "launch_role") as launch_mock, patch.object(
-            dispatch, "remove_issue_label"
-        ) as remove_mock:
+        ), patch.object(dispatch, "launch_role") as launch_mock:
             rc = handle_start_factory("o/r", "https://github.com/o/r")
 
         assert rc == 0
         launch_mock.assert_not_called()
-        remove_mock.assert_not_called()
