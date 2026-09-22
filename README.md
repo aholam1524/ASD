@@ -35,12 +35,14 @@ You describe work in Cursor
    git checkout -b test && git push -u origin test
    ```
 
-5. Optional retry labels:
+5. Retry labels (create once; ignore “already exists”):
 
    ```bash
    gh label create agent-dev --color 1D76DB --description "Retry the Dev cloud agent"
    gh label create agent-test --color 0E8A16 --description "Retry the Test cloud agent"
    gh label create agent-review --color 5319E7 --description "Retry the Review cloud agent"
+   gh label create agent-fix --color D93F0B --description "Retry the Fixer cloud agent"
+   gh label create agent-conflict --color FBCA04 --description "Retry the Conflict cloud agent"
    ```
 
 If `test` is branch-protected, allow GitHub Actions to merge or auto-merge into `test` will fail.
@@ -57,7 +59,9 @@ You do not approve workflow runs. You only merge PRs into `dev` after Review, an
 4. The factory opens `dev` → `test`, runs Test, then CI. On PASS + green CI it merges into `test` and opens `test` → `main`.
 5. Read Test comments on the main PR. You merge into `main`.
 
-Manual labels (`agent-dev` on an issue, `agent-test` / `agent-review` on a PR) retry a launch if one failed.
+Happy path needs no labels. To retry a failed launch: `agent-dev` on an **issue**; `agent-test`, `agent-review`, `agent-fix`, or `agent-conflict` on a **PR**.
+
+**Fixer:** Test FAIL on a feature PR into `dev` starts Fixer once; after Fixer pushes, Test runs again. **Conflict:** auto-merge into `test` failing on merge conflicts (on the `dev` → `test` PR) starts Conflict; after resolve, Test runs again then auto-merge retries. **One feature PR:** only one open `feature/*` → `dev` PR at a time—a second issue gets a comment and Dev is skipped until you merge the blocking PR or add `agent-dev`. You merge into `dev` and `main` yourself; `main` is never auto-merged.
 
 Watch SDK-launched agents in Cursor: Agents → Filter → Source → SDK.
 
