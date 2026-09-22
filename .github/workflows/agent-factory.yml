@@ -2,34 +2,51 @@ name: Agent factory
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, labeled]
   pull_request:
-    types: [labeled]
+    types: [opened, closed, labeled]
+  issue_comment:
+    types: [created]
 
 concurrency:
-  group: agent-factory-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event.label.name }}
+  group: agent-factory-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: false
 
 permissions:
-  issues: write
+  contents: write
   pull-requests: write
-  contents: read
+  issues: write
+  checks: read
 
 jobs:
   dispatch:
     if: >
-      github.event.label.name == 'agent-dev' ||
-      github.event.label.name == 'agent-test' ||
-      github.event.label.name == 'agent-review'
+      (github.event_name == 'issues' && github.event.action == 'opened' && github.event.issue.pull_request == null) ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' &&
+        (github.event.label.name == 'agent-dev' || github.event.label.name == 'agent-test' || github.event.label.name == 'agent-review')) ||
+      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
+      (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true) ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+        (github.event.label.name == 'agent-dev' || github.event.label.name == 'agent-test' || github.event.label.name == 'agent-review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+        contains(github.event.comment.body, 'factory:test-result:pass'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Checkout PR head for CI
+        if: github.event_name == 'issue_comment'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ github.event.issue.number }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install dispatcher
         run: pip install -r requirements.txt
-      - name: Launch cloud agent
+      - name: Dispatch factory
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
