@@ -8,6 +8,7 @@ from typing import Callable
 
 FEATURE_BRANCH_RE = re.compile(r"^feature/(\d+)(?:-|$)")
 CLOSES_ISSUE_RE = re.compile(r"(?:closes|fixes|resolves)\s+#(\d+)", re.I)
+TICKET_ISSUE_RE = re.compile(r"Ticket\s+#(\d+)", re.I)
 
 FACTORY_STATUS_LABELS: frozenset[str] = frozenset(
     {
@@ -46,10 +47,14 @@ def issue_number_from_branch(branch: str) -> int | None:
 
 
 def issue_number_from_pr_body(body: str) -> int | None:
-    match = CLOSES_ISSUE_RE.search(body or "")
-    if not match:
-        return None
-    return int(match.group(1))
+    text = body or ""
+    match = CLOSES_ISSUE_RE.search(text)
+    if match:
+        return int(match.group(1))
+    match = TICKET_ISSUE_RE.search(text)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def ensure_factory_status_labels(owner_repo: str) -> None:
@@ -204,7 +209,7 @@ def apply_factory_status_for_launch(
     if role == "dev":
         set_factory_status(owner_repo, issue_number, "factory-dev")
     elif role == "review":
-        set_factory_status(owner_repo, issue_number, "factory-review")
+        set_factory_status(owner_repo, issue_number, "factory-waiting-dev")
     elif role == "fix":
         set_factory_status(owner_repo, issue_number, "factory-fixer")
     elif role == "conflict":
@@ -216,44 +221,8 @@ def apply_factory_status_for_launch(
         print(f"No factory status mapping for role {role!r}")
 
 
-def issue_number_for_test_to_main_promotion(owner_repo: str) -> int | None:
-    from dispatch import gh_json
-
-    issues = gh_json(
-        [
-            "issue",
-            "list",
-            "--repo",
-            owner_repo,
-            "--label",
-            "factory-test",
-            "--state",
-            "open",
-            "--json",
-            "number",
-        ]
-    )
-    if not issues:
-        return None
-    return issues[0]["number"]
-
-
-def mark_issues_waiting_main_done(owner_repo: str) -> None:
-    from dispatch import gh_json
-
-    issues = gh_json(
-        [
-            "issue",
-            "list",
-            "--repo",
-            owner_repo,
-            "--label",
-            "factory-waiting-main",
-            "--state",
-            "open",
-            "--json",
-            "number",
-        ]
-    )
-    for issue in issues or []:
-        set_factory_status(owner_repo, issue["number"], "factory-done")
+def mark_issue_factory_done(owner_repo: str, issue_number: int | None) -> None:
+    if issue_number is None:
+        print("No issue number for factory-done after merge to main")
+        return
+    set_factory_status(owner_repo, issue_number, "factory-done")
