@@ -60,6 +60,36 @@ class TestDrainOnMainMerge:
         done_mock.assert_called_once_with("o/r", 42)
         drain_mock.assert_called_once_with("o/r", "https://github.com/o/r")
 
+    def test_main_merge_resolves_only_matched_issue(self, tmp_path, monkeypatch) -> None:
+        event = {
+            "action": "closed",
+            "pull_request": {
+                "merged": True,
+                "number": 200,
+                "base": {"ref": MAIN_BRANCH},
+            },
+        }
+        event_path = tmp_path / "event.json"
+        event_path.write_text(json.dumps(event), encoding="utf-8")
+        monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+        monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+
+        with patch.object(
+            dispatch, "ensure_factory_status_labels"
+        ), patch.object(
+            dispatch, "resolve_issue_number_for_pr", return_value=55
+        ) as resolve_mock, patch.object(
+            dispatch, "mark_issue_factory_done"
+        ) as done_mock, patch.object(
+            dispatch, "start_oldest_factory_queued", return_value=0
+        ):
+            rc = dispatch.main([])
+
+        assert rc == 0
+        resolve_mock.assert_called_once_with("o/r", 200)
+        done_mock.assert_called_once_with("o/r", 55)
+
     def test_idle_queue_after_main_merge(self, tmp_path, monkeypatch) -> None:
         event = {
             "action": "closed",

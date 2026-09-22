@@ -151,10 +151,30 @@ class TestApplyFactoryStatusForLaunch:
 
 
 class TestMarkIssueFactoryDone:
-    def test_marks_single_issue(self) -> None:
+    def test_marks_single_issue_and_closes(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(args, **kwargs):
+            calls.append(list(args))
+            return MagicMock(returncode=0, stdout="", stderr="")
+
         with patch.object(status_labels, "set_factory_status") as status_mock:
-            status_labels.mark_issue_factory_done("o/r", 74)
-        status_mock.assert_called_once_with("o/r", 74, "factory-done")
+            status_labels.mark_issue_factory_done("o/r", 74, run=fake_run)
+
+        status_mock.assert_called_once_with("o/r", 74, "factory-done", run=fake_run)
+        assert calls == [
+            [
+                "gh",
+                "issue",
+                "comment",
+                "74",
+                "--repo",
+                "o/r",
+                "--body",
+                status_labels.MAIN_MERGE_CLOSE_COMMENT,
+            ],
+            ["gh", "issue", "close", "74", "--repo", "o/r"],
+        ]
 
     def test_skips_when_no_issue_number(self) -> None:
         with patch.object(status_labels, "set_factory_status") as status_mock:
