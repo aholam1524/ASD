@@ -45,6 +45,36 @@ You describe work in Cursor
    gh label create agent-conflict --color FBCA04 --description "Retry the Conflict cloud agent"
    ```
 
+   Factory status labels (the dispatcher also creates these if missing; ignore “already exists”):
+
+   ```bash
+   gh label create factory-queued --color C5DEF5 --description "Ticket queued for Dev"
+   gh label create factory-dev --color 1D76DB --description "Dev agent running"
+   gh label create factory-review --color 5319E7 --description "Review agent on feature PR"
+   gh label create factory-waiting-dev --color BFDADC --description "Review done; merge feature PR into dev"
+   gh label create factory-test --color 0E8A16 --description "Test agent on promotion PR"
+   gh label create factory-fixer --color D93F0B --description "Fixer agent on feature PR"
+   gh label create factory-conflict --color FBCA04 --description "Conflict agent on dev→test PR"
+   gh label create factory-waiting-main --color FEF2C0 --description "Test on test→main PR; merge to main"
+   gh label create factory-done --color 006B75 --description "Work merged to main"
+   gh label create factory-blocked --color B60205 --description "Test failed after Fixer; manual retry"
+   ```
+
+   | Label | Meaning |
+   | --- | --- |
+   | `factory-queued` | Issue filed; Dev will start |
+   | `factory-dev` | Dev agent running |
+   | `factory-review` | Review agent on the feature PR |
+   | `factory-waiting-dev` | Review finished; merge the feature PR into `dev` |
+   | `factory-test` | Test agent on a promotion PR (`dev`→`test` or re-test after fix) |
+   | `factory-fixer` | Fixer agent on the feature PR |
+   | `factory-conflict` | Conflict agent on the `dev`→`test` PR |
+   | `factory-waiting-main` | Test on `test`→`main`; you merge to `main` |
+   | `factory-done` | Work merged to `main` |
+   | `factory-blocked` | Test failed again after Fixer; use `agent-fix` / `agent-test` to retry |
+
+   Each ticket keeps **one** `factory-*` status label at a time (retry labels stay separate).
+
 If `test` is branch-protected, allow GitHub Actions to merge or auto-merge into `test` will fail.
 
 In the repo: Settings → Actions → General → Workflow permissions → **Read and write**. Otherwise the factory cannot create `dev`/`test` or open promotion PRs.
