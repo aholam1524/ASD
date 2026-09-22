@@ -1,0 +1,26 @@
+name: Agent ticket
+description: Ticket for the Dev / Test / Review factory
+title: ""
+labels: []
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What should happen
+      description: Describe the change. The Dev agent treats this as the spec.
+      placeholder: Add a Factory section to the README that explains how to label an issue.
+    validations:
+      required: true
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: Concrete checks the Test and Review agents can use.
+      placeholder: |
+        - README has a Factory section
+        - The section names the three labels
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: After the issue looks right, add the `agent-dev` label to start the Dev agent. Do not add that label until you want a cloud agent to run.
