@@ -449,26 +449,16 @@ def ensure_promotion_pr(
         print(combined, file=sys.stderr)
         created.check_returncode()
 
-    listed = gh_json(
-        [
-            "pr",
-            "list",
-            "--repo",
-            owner_repo,
-            "--base",
-            base,
-            "--head",
-            f"{owner}:{head}",
-            "--state",
-            "open",
-            "--json",
-            "number",
-        ]
+    pr_number = pr_number_from_create_output(created.stdout) or pr_number_from_create_output(
+        created.stderr
     )
-    if not listed:
-        raise RuntimeError(f"Created {head} -> {base} PR but could not find it")
-    print(f"Opened promotion PR #{listed[0]['number']} ({head} -> {base})")
-    return listed[0]["number"]
+    if pr_number is None:
+        raise RuntimeError(
+            f"Created {head} -> {base} PR but could not parse its number "
+            f"from: {(created.stdout or created.stderr or '').strip()!r}"
+        )
+    print(f"Opened promotion PR #{pr_number} ({head} -> {base})")
+    return pr_number
 
 
 def launch_role_on_pr(owner_repo: str, repo_url: str, role: str, pr_number: int) -> int:
