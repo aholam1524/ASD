@@ -23,4 +23,4 @@ body:
       required: true
   - type: markdown
     attributes:
-      value: Submitting this issue starts the Dev agent. It will open a PR into `dev`. You merge that PR. Do not add `agent-dev` unless a launch failed and you need a retry.
+      value: Submitting this issue starts the Dev agent. It will open a PR into `dev`. You merge that PR. Happy path needs no labels. Retry with `agent-dev` on an issue, or `agent-test` / `agent-review` / `agent-fix` / `agent-conflict` on a PR.
