@@ -2,6 +2,8 @@
 
 GitHub Issues are tickets. Labels launch Cursor cloud agents for **dev**, **test**, and **review**. Agents never merge.
 
+**Status:** v0 of the agent factory; agents never merge.
+
 ## One-time setup
 
 1. Create labels in this repository:
