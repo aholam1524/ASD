@@ -28,6 +28,7 @@ LABEL_ROLES = {
     "agent-test": "test",
     "agent-review": "review",
     "agent-fix": "fix",
+    "agent-conflict": "conflict",
 }
 PASS_MARKER = "<!-- factory:test-result:pass -->"
 FAIL_MARKER = "<!-- factory:test-result:fail -->"
@@ -282,7 +283,7 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
     if role == "dev" and is_pr:
         post_comment(owner_repo, number, f"`agent-dev` is only valid on issues. Ignoring on PR #{number}.")
         return 0
-    if role in {"test", "review", "fix"} and not is_pr:
+    if role in {"test", "review", "fix", "conflict"} and not is_pr:
         post_comment(
             owner_repo,
             number,
@@ -298,13 +299,13 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
     html_url = target.get("html_url") or (
         f"{repo_url}/{'pull' if is_pr else 'issues'}/{number}"
     )
-    force = role == "fix"
+    force = role in {"fix", "conflict"}
     idempotency_key = None
     if force:
-        fix_marker = role_marker("fix", number)
-        next_attempt = count_marker_occurrences(owner_repo, number, fix_marker) + 1
+        retry_marker = role_marker(role, number)
+        next_attempt = count_marker_occurrences(owner_repo, number, retry_marker) + 1
         if next_attempt > 1:
-            idempotency_key = f"factory-fix-{owner_repo}-{number}-{next_attempt}"
+            idempotency_key = f"factory-{role}-{owner_repo}-{number}-{next_attempt}"
     return launch_role(
         owner_repo,
         repo_url,
@@ -335,6 +336,8 @@ def handle_issue_comment(owner_repo: str, repo_url: str, owner: str, event: dict
         return handle_test_pass(owner_repo, repo_url, owner, issue["number"])
     if FAIL_MARKER in body:
         return handle_test_fail(owner_repo, repo_url, issue["number"])
+    if "factory:conflict-resolved" in body:
+        return handle_conflict_resolved(owner_repo, repo_url, issue["number"])
     print("Comment has no test result marker; ignoring")
     return 0
 
@@ -391,6 +394,110 @@ def is_promotion_pr(base: str, head: str) -> bool:
     )
 
 
+def is_merge_conflict_error(output: str) -> bool:
+    text = output.lower()
+    needles = (
+        "merge conflict",
+        "not mergeable",
+        "mergeable_state",
+        "unmergeable",
+        "dirty",
+        "conflicting files",
+    )
+    return any(n in text for n in needles)
+
+
+def handle_merge_conflict(
+    owner_repo: str, repo_url: str, number: int, merge_output: str
+) -> int:
+    pr = gh_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            owner_repo,
+            "--json",
+            "number,baseRefName,headRefName,state",
+        ]
+    )
+    base = pr.get("baseRefName") or ""
+    head = pr.get("headRefName") or ""
+    if base != TEST_BRANCH or head != DEV_BRANCH:
+        post_comment(
+            owner_repo,
+            number,
+            "Merge conflict reported, but this is not a `dev` → `test` promotion PR. "
+            "Not launching Conflict.",
+        )
+        print(f"Merge conflict on non-promotion PR #{number} ({head} -> {base}); ignoring")
+        return 0
+
+    conflict_marker = role_marker("conflict", number)
+    if comment_has_marker(owner_repo, number, conflict_marker):
+        post_comment(
+            owner_repo,
+            number,
+            "Auto-merge into `test` failed due to conflicts, but **Conflict** already ran for this PR. "
+            "Add the `agent-conflict` label to retry Conflict.",
+        )
+        print(f"Conflict marker already present on PR #{number}; skipping")
+        return 0
+
+    post_comment(
+        owner_repo,
+        number,
+        "CI passed but auto-merge into `test` failed due to merge conflicts. Launching **Conflict**…\n\n"
+        f"```\n{merge_output[-2000:]}\n```",
+    )
+    print(f"Merge conflict on promotion PR #{number}; launching Conflict")
+    return launch_role_on_pr(owner_repo, repo_url, "conflict", number)
+
+
+def handle_conflict_resolved(owner_repo: str, repo_url: str, number: int) -> int:
+    pr = gh_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            owner_repo,
+            "--json",
+            "number,state,baseRefName,headRefName",
+        ]
+    )
+    if pr.get("state") != "OPEN":
+        print(f"PR #{number} is not open; ignoring conflict-resolved")
+        return 0
+
+    base = pr.get("baseRefName") or ""
+    head = pr.get("headRefName") or ""
+    if base != TEST_BRANCH or head != DEV_BRANCH:
+        print(f"conflict-resolved on non-promotion PR #{number}; ignoring")
+        return 0
+
+    resolved_marker = conflict_resolved_marker(number)
+    resolved_count = count_marker_occurrences(owner_repo, number, resolved_marker)
+    test_after_count = count_test_after_conflict_launches(owner_repo, number)
+    if resolved_count <= test_after_count:
+        print(
+            f"conflict-resolved on PR #{number} but Test-after-conflict is up to date; ignoring"
+        )
+        return 0
+
+    attempt = test_after_count + 1
+    marker = after_conflict_test_marker(number, attempt)
+    print(f"conflict-resolved on PR #{number}; launching Test (after conflict #{attempt})")
+    return launch_role_on_pr(
+        owner_repo,
+        repo_url,
+        "test",
+        number,
+        marker=marker,
+        idempotency_key=f"factory-test-after-conflict-{owner_repo}-{number}-{attempt}",
+    )
+
+
 def handle_test_pass(owner_repo: str, repo_url: str, owner: str, number: int) -> int:
     pr = gh_json(["pr", "view", str(number), "--repo", owner_repo, "--json",
                   "number,title,body,url,state,mergedAt,baseRefName,headRefName"])
@@ -425,10 +532,23 @@ def handle_test_pass(owner_repo: str, repo_url: str, owner: str, number: int) ->
         )
         return 0
 
-    subprocess.run(
+    merge_result = subprocess.run(
         ["gh", "pr", "merge", str(number), "--repo", owner_repo, "--merge"],
-        check=True,
+        capture_output=True,
+        text=True,
     )
+    if merge_result.returncode != 0:
+        combined = (merge_result.stdout or "") + (merge_result.stderr or "")
+        if is_merge_conflict_error(combined):
+            return handle_merge_conflict(owner_repo, repo_url, number, combined)
+        post_comment(
+            owner_repo,
+            number,
+            "CI passed but merge into `test` failed (not a merge conflict). Not launching Conflict.\n\n"
+            f"```\n{combined[-4000:]}\n```",
+        )
+        return 0
+
     post_comment(owner_repo, number, "CI passed. Merged into `test`.")
     return promote_test_to_main(owner_repo, repo_url, owner)
 
@@ -586,6 +706,14 @@ def role_marker(role: str, number: int) -> str:
 
 def after_fix_test_marker(number: int, attempt: int) -> str:
     return f"<!-- factory:test-after-fix:{number}:{attempt} -->"
+
+
+def after_conflict_test_marker(number: int, attempt: int) -> str:
+    return f"<!-- factory:test-after-conflict:{number}:{attempt} -->"
+
+
+def conflict_resolved_marker(number: int) -> str:
+    return f"<!-- factory:conflict-resolved:{number} -->"
 
 
 def launch_role(
@@ -855,6 +983,11 @@ def count_marker_occurrences(owner_repo: str, number: int, marker: str) -> int:
 
 def count_test_after_fix_launches(owner_repo: str, number: int) -> int:
     prefix = f"<!-- factory:test-after-fix:{number}:"
+    return issue_comment_bodies(owner_repo, number).count(prefix)
+
+
+def count_test_after_conflict_launches(owner_repo: str, number: int) -> int:
+    prefix = f"<!-- factory:test-after-conflict:{number}:"
     return issue_comment_bodies(owner_repo, number).count(prefix)
 
 

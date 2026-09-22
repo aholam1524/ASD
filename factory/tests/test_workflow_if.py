@@ -16,10 +16,11 @@ def test_issue_comment_fail_is_grouped_with_pull_request() -> None:
     needle = (
         "github.event_name == 'issue_comment' && github.event.issue.pull_request &&\n"
         "        (contains(github.event.comment.body, 'factory:test-result:pass') ||\n"
-        "         contains(github.event.comment.body, 'factory:test-result:fail'))"
+        "         contains(github.event.comment.body, 'factory:test-result:fail') ||\n"
+        "         contains(github.event.comment.body, 'factory:conflict-resolved'))"
     )
     assert needle in workflow, (
-        "FAIL marker must be OR'd with PASS inside the same issue_comment+PR group"
+        "FAIL and conflict-resolved markers must be OR'd with PASS inside the same issue_comment+PR group"
     )
 
     bad = (
@@ -27,3 +28,9 @@ def test_issue_comment_fail_is_grouped_with_pull_request() -> None:
         "      contains(github.event.comment.body, 'factory:test-result:fail')"
     )
     assert bad not in workflow
+
+    bad_conflict = (
+        "contains(github.event.comment.body, 'factory:test-result:fail')) ||\n"
+        "      contains(github.event.comment.body, 'factory:conflict-resolved')"
+    )
+    assert bad_conflict not in workflow
