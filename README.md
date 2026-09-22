@@ -64,8 +64,8 @@ You describe work in Cursor
    | --- | --- |
    | `factory-queued` | Issue filed; waiting for **Start factory** |
    | `factory-dev` | Dev agent running |
-   | `factory-review` | Review agent on the feature PR |
-   | `factory-waiting-dev` | Review finished; merge the feature PR into `dev` |
+   | `factory-review` | (Reserved) Review agent on the feature PR |
+   | `factory-waiting-dev` | Review agent launched; merge the feature PR into `dev` when Review finishes |
    | `factory-test` | Test agent on a promotion PR (`dev`→`test` or re-test after fix) |
    | `factory-fixer` | Fixer agent on the feature PR |
    | `factory-conflict` | Conflict agent on the `dev`→`test` PR |

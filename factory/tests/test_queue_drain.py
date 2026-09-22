@@ -48,14 +48,16 @@ class TestDrainOnMainMerge:
         with patch.object(
             dispatch, "ensure_factory_status_labels"
         ), patch.object(
-            dispatch, "mark_issues_waiting_main_done"
+            dispatch, "mark_issue_factory_done"
         ) as done_mock, patch.object(
+            dispatch, "resolve_issue_number_for_pr", return_value=42
+        ), patch.object(
             dispatch, "start_oldest_factory_queued", return_value=0
         ) as drain_mock:
             rc = dispatch.main([])
 
         assert rc == 0
-        done_mock.assert_called_once_with("o/r")
+        done_mock.assert_called_once_with("o/r", 42)
         drain_mock.assert_called_once_with("o/r", "https://github.com/o/r")
 
     def test_idle_queue_after_main_merge(self, tmp_path, monkeypatch) -> None:
@@ -76,7 +78,9 @@ class TestDrainOnMainMerge:
         with patch.object(
             dispatch, "ensure_factory_status_labels"
         ), patch.object(
-            dispatch, "mark_issues_waiting_main_done"
+            dispatch, "mark_issue_factory_done"
+        ), patch.object(
+            dispatch, "resolve_issue_number_for_pr", return_value=7
         ), patch.object(
             dispatch, "oldest_queued_issue", return_value=None
         ), patch.object(dispatch, "launch_role") as launch_mock:
