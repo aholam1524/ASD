@@ -221,8 +221,54 @@ def apply_factory_status_for_launch(
         print(f"No factory status mapping for role {role!r}")
 
 
-def mark_issue_factory_done(owner_repo: str, issue_number: int | None) -> None:
+MAIN_MERGE_CLOSE_COMMENT = "Merged to main, closing."
+
+
+def mark_issue_factory_done(
+    owner_repo: str,
+    issue_number: int | None,
+    *,
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> None:
     if issue_number is None:
         print("No issue number for factory-done after merge to main")
         return
-    set_factory_status(owner_repo, issue_number, "factory-done")
+    if run is None:
+        run = subprocess.run
+    set_factory_status(owner_repo, issue_number, "factory-done", run=run)
+    comment = run(
+        [
+            "gh",
+            "issue",
+            "comment",
+            str(issue_number),
+            "--repo",
+            owner_repo,
+            "--body",
+            MAIN_MERGE_CLOSE_COMMENT,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if comment.returncode != 0:
+        combined = (comment.stdout or "") + (comment.stderr or "")
+        print(
+            f"Could not comment on issue #{issue_number} before close: {combined.strip()}"
+        )
+    close = run(
+        [
+            "gh",
+            "issue",
+            "close",
+            str(issue_number),
+            "--repo",
+            owner_repo,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if close.returncode != 0:
+        combined = (close.stdout or "") + (close.stderr or "")
+        print(f"Could not close issue #{issue_number}: {combined.strip()}")
+        return
+    print(f"Issue #{issue_number} closed after merge to main")
