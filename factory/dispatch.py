@@ -19,9 +19,9 @@ from cursor_sdk import Agent, CloudAgentOptions, CloudRepository, CursorAgentErr
 from status_labels import (
     apply_factory_status_for_launch,
     ensure_factory_status_labels,
-    issue_number_for_test_to_main_promotion,
     issue_number_from_branch,
-    mark_issues_waiting_main_done,
+    mark_issue_factory_done,
+    resolve_issue_number_for_pr,
     set_factory_status,
 )
 
@@ -104,9 +104,12 @@ def main(argv: list[str] | None = None) -> int:
             merged = {**pr, "headRefName": head_ref}
             return promote_dev_to_test(owner_repo, repo_url, owner, merged)
         if base == TEST_BRANCH:
-            return promote_test_to_main(owner_repo, repo_url, owner)
+            head_ref = pr.get("headRefName") or (pr.get("head") or {}).get("ref") or ""
+            merged = {**pr, "headRefName": head_ref}
+            return promote_test_to_main(owner_repo, repo_url, owner, merged_pr=merged)
         if base == MAIN_BRANCH:
-            mark_issues_waiting_main_done(owner_repo)
+            ticket = resolve_issue_number_for_pr(owner_repo, pr["number"])
+            mark_issue_factory_done(owner_repo, ticket)
             print(f"Merged PR #{pr['number']} into {MAIN_BRANCH}; marked factory-done")
             return start_oldest_factory_queued(owner_repo, repo_url)
         print(f"Merged PR is not into {DEV_BRANCH} or {TEST_BRANCH}; ignoring")
@@ -459,7 +462,14 @@ def handle_merge_conflict(
         f"```\n{merge_output[-2000:]}\n```",
     )
     print(f"Merge conflict on promotion PR #{number}; launching Conflict")
-    return launch_role_on_pr(owner_repo, repo_url, "conflict", number)
+    factory_issue = resolve_issue_number_for_pr(owner_repo, number)
+    return launch_role_on_pr(
+        owner_repo,
+        repo_url,
+        "conflict",
+        number,
+        factory_issue_number=factory_issue,
+    )
 
 
 def handle_conflict_resolved(owner_repo: str, repo_url: str, number: int) -> int:
@@ -496,6 +506,7 @@ def handle_conflict_resolved(owner_repo: str, repo_url: str, number: int) -> int
     attempt = test_after_count + 1
     marker = after_conflict_test_marker(number, attempt)
     print(f"conflict-resolved on PR #{number}; launching Test (after conflict #{attempt})")
+    factory_issue = resolve_issue_number_for_pr(owner_repo, number)
     return launch_role_on_pr(
         owner_repo,
         repo_url,
@@ -503,6 +514,7 @@ def handle_conflict_resolved(owner_repo: str, repo_url: str, number: int) -> int
         number,
         marker=marker,
         idempotency_key=f"factory-test-after-conflict-{owner_repo}-{number}-{attempt}",
+        factory_issue_number=factory_issue,
     )
 
 
@@ -558,16 +570,63 @@ def handle_test_pass(owner_repo: str, repo_url: str, owner: str, number: int) ->
         return 0
 
     post_comment(owner_repo, number, "CI passed. Merged into `test`.")
-    return promote_test_to_main(owner_repo, repo_url, owner)
+    merged = {**pr, "number": number}
+    return promote_test_to_main(owner_repo, repo_url, owner, merged_pr=merged)
+
+
+def promotion_ticket_line(issue_number: int) -> str:
+    return f"Closes #{issue_number}\n"
+
+
+def ensure_promotion_pr_has_ticket(
+    owner_repo: str, pr_number: int, issue_number: int | None
+) -> None:
+    if issue_number is None:
+        return
+    if resolve_issue_number_for_pr(owner_repo, pr_number) is not None:
+        return
+    pr = gh_json(
+        [
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            owner_repo,
+            "--json",
+            "body",
+        ]
+    )
+    body = (pr.get("body") or "").rstrip()
+    body = f"{body}\n\n{promotion_ticket_line(issue_number)}".strip() + "\n"
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "edit",
+            str(pr_number),
+            "--repo",
+            owner_repo,
+            "--body",
+            body,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        combined = (result.stdout or "") + (result.stderr or "")
+        print(f"Could not add ticket to promotion PR #{pr_number}: {combined.strip()}")
 
 
 def promote_dev_to_test(owner_repo: str, repo_url: str, owner: str, merged_pr: dict) -> int:
     ensure_branch(DEV_BRANCH, MAIN_BRANCH)
     ensure_branch(TEST_BRANCH, MAIN_BRANCH)
+    factory_issue = issue_number_from_branch(merged_pr.get("headRefName") or "")
     title = f"Promote {DEV_BRANCH} to {TEST_BRANCH}"
+    ticket_line = promotion_ticket_line(factory_issue) if factory_issue else ""
     body = (
         f"{PROMOTE_DEV_TO_TEST}\n"
         f"Promotion after merging #{merged_pr['number']} into `{DEV_BRANCH}`.\n"
+        f"{ticket_line}"
     )
     pr_number = ensure_promotion_pr(
         owner_repo,
@@ -585,7 +644,7 @@ def promote_dev_to_test(owner_repo: str, repo_url: str, owner: str, merged_pr: d
             f"Nothing to promote from `{DEV_BRANCH}` to `{TEST_BRANCH}` (branches are even).",
         )
         return 0
-    factory_issue = issue_number_from_branch(merged_pr.get("headRefName") or "")
+    ensure_promotion_pr_has_ticket(owner_repo, pr_number, factory_issue)
     return launch_role_on_pr(
         owner_repo,
         repo_url,
@@ -595,12 +654,19 @@ def promote_dev_to_test(owner_repo: str, repo_url: str, owner: str, merged_pr: d
     )
 
 
-def promote_test_to_main(owner_repo: str, repo_url: str, owner: str) -> int:
+def promote_test_to_main(
+    owner_repo: str, repo_url: str, owner: str, *, merged_pr: dict | None = None
+) -> int:
     ensure_branch(TEST_BRANCH, MAIN_BRANCH)
+    factory_issue = None
+    if merged_pr is not None:
+        factory_issue = resolve_issue_number_for_pr(owner_repo, merged_pr["number"])
     title = f"Promote {TEST_BRANCH} to {MAIN_BRANCH}"
+    ticket_line = promotion_ticket_line(factory_issue) if factory_issue else ""
     body = (
         f"{PROMOTE_TEST_TO_MAIN}\n"
         f"Promotion after merging into `{TEST_BRANCH}`. Merge this PR yourself; no automatic merge to main.\n"
+        f"{ticket_line}"
     )
     pr_number = ensure_promotion_pr(
         owner_repo,
@@ -614,7 +680,7 @@ def promote_test_to_main(owner_repo: str, repo_url: str, owner: str) -> int:
     if pr_number is None:
         print("Nothing to promote from test to main")
         return 0
-    factory_issue = issue_number_for_test_to_main_promotion(owner_repo)
+    ensure_promotion_pr_has_ticket(owner_repo, pr_number, factory_issue)
     return launch_role_on_pr(
         owner_repo,
         repo_url,
@@ -763,6 +829,13 @@ def launch_role(
     marker = marker or role_marker(role, number)
     if not force and comment_has_marker(owner_repo, number, marker):
         print(f"Already launched {role} for #{number}; skipping")
+        apply_factory_status_for_launch(
+            owner_repo,
+            role,
+            number=number,
+            is_pr=is_pr,
+            factory_issue_number=factory_issue_number,
+        )
         return 0
 
     extra = ""
@@ -903,29 +976,6 @@ def build_prompt(
         f"{extra_block}\n"
         f"{body.strip() or '(no description)'}\n"
     )
-
-
-def ensure_factory_queued_label(owner_repo: str) -> None:
-    result = subprocess.run(
-        [
-            "gh",
-            "label",
-            "create",
-            FACTORY_QUEUED_LABEL,
-            "--repo",
-            owner_repo,
-            "--color",
-            "C5DEF5",
-            "--description",
-            "Waiting in the factory queue",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        combined = (result.stdout or "") + (result.stderr or "")
-        if "already exists" not in combined.lower():
-            result.check_returncode()
 
 
 def add_issue_label(owner_repo: str, issue_number: int, label: str) -> None:
