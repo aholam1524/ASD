@@ -94,7 +94,7 @@ That starts Dev on the oldest open issue with the `factory-queued` label. If the
 2. Run **Start factory** (see above). Wait for a PR from `feature/<number>-<slug>` **into `dev`** (opened on push if Dev only pushed a branch). Review starts automatically.
 3. You merge that PR into `dev`.
 4. The factory opens `dev` → `test`, runs Test, then CI. On PASS + green CI it merges into `test` and opens `test` → `main`.
-5. Read Test comments on the main PR. You merge into `main`.
+5. Read Test comments on the main PR. You merge into `main`. After that merge, the next open issue with `factory-queued` starts Dev automatically (same rules as **Start factory**).
 
 Happy path needs no labels. To retry a failed launch: `agent-dev` on an **issue**; `agent-test`, `agent-review`, `agent-fix`, or `agent-conflict` on a **PR**.
 
