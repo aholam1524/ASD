@@ -13,8 +13,10 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      # Always run factory/dispatch.py from dev; the Run workflow branch dropdown is ignored.
       - uses: actions/checkout@v4
         with:
+          ref: dev
           fetch-depth: 0
           persist-credentials: true
           token: ${{ secrets.FACTORY_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
