@@ -1,12 +1,13 @@
 # Agent factory
 
-Describe the work in Cursor chat in this repo. The agent files a GitHub issue; that starts Dev. Code moves `feature/N-slug` → `dev` → `test` → `main`. You merge into `dev` and `main`. Merge into `test` is automatic when the Test agent reports PASS and CI is green.
+Describe the work in Cursor chat in this repo. The agent files a GitHub issue, which is **queued** until you run **Start factory**. Code moves `feature/N-slug` → `dev` → `test` → `main`. You merge into `dev` and `main`. Merge into `test` is automatic when the Test agent reports PASS and CI is green. Press **Start factory** once; after you merge each ticket to `main`, the next queued issue starts by itself.
 
 When Dev pushes `feature/*`, the factory opens a PR **into `dev`**, adds `agent-review`, and starts Review (even if the Dev agent forgot to open the PR).
 
 ```text
 You describe work in Cursor
-    → Agent files a GitHub issue
+    → Agent files a GitHub issue (factory-queued)
+    → You run Start factory (or merge prior ticket to main to drain the queue)
     → Dev agent: branch feature/<issue>-<slug>
     → Push opens PR into dev, labels agent-review, starts Review
     → You merge into dev
@@ -53,7 +54,11 @@ You do not approve workflow runs. You only merge PRs into `dev` after Review, an
 
 ## How to use it
 
-1. In Cursor, say what you want built (for example: "add a clamp helper in clamp/"). The agent creates the issue. No label required.
+### How to start
+
+Actions → [**Start factory**](https://github.com/aholam1524/ASD/actions/workflows/start-factory.yml) → **Run workflow**. That begins Dev on the oldest open issue with the `factory-queued` label.
+
+1. In Cursor, say what you want built (for example: "add a clamp helper in clamp/"). The agent creates the issue; the factory adds `factory-queued` and waits for **Start factory** (or the next drain after a merge to `main`).
 2. Wait for a PR from `feature/<number>-<slug>` **into `dev`** (opened on push if Dev only pushed a branch). Review starts automatically.
 3. You merge that PR into `dev`.
 4. The factory opens `dev` → `test`, runs Test, then CI. On PASS + green CI it merges into `test` and opens `test` → `main`.

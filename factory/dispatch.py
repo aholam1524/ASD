@@ -30,6 +30,7 @@ LABEL_ROLES = {
     "agent-fix": "fix",
     "agent-conflict": "conflict",
 }
+FACTORY_QUEUED_LABEL = "factory-queued"
 PASS_MARKER = "<!-- factory:test-result:pass -->"
 FAIL_MARKER = "<!-- factory:test-result:fail -->"
 PROMOTE_DEV_TO_TEST = "<!-- factory:promote:dev-to-test -->"
@@ -59,24 +60,15 @@ def main(argv: list[str] | None = None) -> int:
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     action = event.get("action") or ""
 
+    if event_name == "workflow_dispatch":
+        return start_oldest_factory_queued(owner_repo, repo_url)
+
     if event_name == "issues" and action == "opened":
         issue = event.get("issue") or {}
         if issue.get("pull_request"):
             print("Ignoring pull_request issue-opened event")
             return 0
-        ensure_branch(DEV_BRANCH, MAIN_BRANCH)
-        if skip_dev_if_feature_pr_open(owner_repo, issue["number"]):
-            return 0
-        return launch_role(
-            owner_repo,
-            repo_url,
-            "dev",
-            number=issue["number"],
-            title=issue.get("title") or "",
-            body=issue.get("body") or "",
-            html_url=issue.get("html_url") or f"{repo_url}/issues/{issue['number']}",
-            is_pr=False,
-        )
+        return queue_new_issue(owner_repo, repo_url, issue)
 
     if event_name in {"issues", "pull_request"} and action == "labeled":
         return handle_label(owner_repo, repo_url, event)
@@ -91,17 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if event_name == "pull_request" and action == "closed":
-        pr = event["pull_request"]
-        if not pr.get("merged"):
-            print("PR closed without merge; ignoring")
-            return 0
-        base = pr.get("base", {}).get("ref") or ""
-        if base == DEV_BRANCH:
-            return promote_dev_to_test(owner_repo, repo_url, owner, pr)
-        if base == TEST_BRANCH:
-            return promote_test_to_main(owner_repo, repo_url, owner)
-        print(f"Merged PR is not into {DEV_BRANCH} or {TEST_BRANCH}; ignoring")
-        return 0
+        return handle_merged_pr_closed(owner_repo, repo_url, owner, event.get("pull_request") or {})
 
     if event_name == "issue_comment" and action == "created":
         return handle_issue_comment(owner_repo, repo_url, owner, event)
@@ -110,6 +92,24 @@ def main(argv: list[str] | None = None) -> int:
         return handle_feature_push(owner_repo, repo_url, owner, event)
 
     print(f"Ignoring event {event_name}.{action}")
+    return 0
+
+
+def handle_merged_pr_closed(
+    owner_repo: str, repo_url: str, owner: str, pr: dict
+) -> int:
+    if not pr.get("merged"):
+        print("PR closed without merge; ignoring")
+        return 0
+    base = pr.get("base", {}).get("ref") or ""
+    if base == DEV_BRANCH:
+        return promote_dev_to_test(owner_repo, repo_url, owner, pr)
+    if base == TEST_BRANCH:
+        return promote_test_to_main(owner_repo, repo_url, owner)
+    if base == MAIN_BRANCH:
+        print(f"Merged PR #{pr['number']} into {MAIN_BRANCH}; checking factory queue")
+        return start_oldest_factory_queued(owner_repo, repo_url)
+    print(f"Merged PR is not into {DEV_BRANCH}, {TEST_BRANCH}, or {MAIN_BRANCH}; ignoring")
     return 0
 
 
@@ -870,6 +870,132 @@ def build_prompt(
         f"- URL: {html_url}\n"
         f"{extra_block}\n"
         f"{body.strip() or '(no description)'}\n"
+    )
+
+
+def queue_new_issue(owner_repo: str, repo_url: str, issue: dict) -> int:
+    ensure_branch(DEV_BRANCH, MAIN_BRANCH)
+    ensure_label(
+        owner_repo,
+        FACTORY_QUEUED_LABEL,
+        "C5DEF5",
+        "Waiting in the factory queue; run Start factory to begin",
+    )
+    number = issue["number"]
+    add_issue_label(owner_repo, number, FACTORY_QUEUED_LABEL)
+    post_comment(
+        owner_repo,
+        number,
+        "This issue is **queued** for the agent factory. "
+        "Run **Start factory** under Actions to begin work on the oldest queued issue.",
+    )
+    print(f"Queued issue #{number}")
+    return 0
+
+
+def list_factory_queued_issues(owner_repo: str) -> list[dict]:
+    issues = gh_json(
+        [
+            "issue",
+            "list",
+            "--repo",
+            owner_repo,
+            "--state",
+            "open",
+            "--label",
+            FACTORY_QUEUED_LABEL,
+            "--json",
+            "number,title,body,url",
+            "--limit",
+            "1000",
+        ]
+    )
+    if not isinstance(issues, list):
+        return []
+    return issues
+
+
+def start_oldest_factory_queued(owner_repo: str, repo_url: str) -> int:
+    ensure_branch(DEV_BRANCH, MAIN_BRANCH)
+    queued = list_factory_queued_issues(owner_repo)
+    if not queued:
+        print("Factory queue is idle; no open issues with factory-queued")
+        return 0
+
+    queued.sort(key=lambda item: item["number"])
+    issue = queued[0]
+    number = issue["number"]
+    if skip_dev_if_feature_pr_open(owner_repo, number):
+        return 0
+
+    remove_issue_label(owner_repo, number, FACTORY_QUEUED_LABEL)
+    html_url = issue.get("url") or f"{repo_url}/issues/{number}"
+    return launch_role(
+        owner_repo,
+        repo_url,
+        "dev",
+        number=number,
+        title=issue.get("title") or "",
+        body=issue.get("body") or "",
+        html_url=html_url,
+        is_pr=False,
+    )
+
+
+def ensure_label(owner_repo: str, name: str, color: str, description: str) -> None:
+    result = subprocess.run(
+        [
+            "gh",
+            "label",
+            "create",
+            name,
+            "--repo",
+            owner_repo,
+            "--color",
+            color,
+            "--description",
+            description,
+            "--force",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        combined = (result.stdout or "") + (result.stderr or "")
+        if "already exists" not in combined.lower():
+            print(combined, file=sys.stderr)
+            result.check_returncode()
+
+
+def add_issue_label(owner_repo: str, number: int, label: str) -> None:
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(number),
+            "--repo",
+            owner_repo,
+            "--add-label",
+            label,
+        ],
+        check=True,
+    )
+
+
+def remove_issue_label(owner_repo: str, number: int, label: str) -> None:
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(number),
+            "--repo",
+            owner_repo,
+            "--remove-label",
+            label,
+        ],
+        check=True,
     )
 
 
