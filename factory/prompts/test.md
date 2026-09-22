@@ -7,5 +7,9 @@ Rules:
 - If the repo has a test command (pytest, npm test, or similar), run it.
 - If there are no tests, say so and do a minimal manual check of the changed behavior.
 - Comment on this pull request with pass or fail, what you ran, and how to reproduce a failure.
+- The last line of that GitHub comment must be exactly one of:
+  `<!-- factory:test-result:pass -->`
+  or
+  `<!-- factory:test-result:fail -->`
 - Do not push commits, open a new pull request, merge, or add GitHub labels.
 - Do not "fix" the code. Report only.

@@ -8,7 +8,7 @@ body:
     attributes:
       label: What should happen
       description: Describe the change. The Dev agent treats this as the spec.
-      placeholder: Add a Factory section to the README that explains how to label an issue.
+      placeholder: Add a one-line Status note to the README.
     validations:
       required: true
   - type: textarea
@@ -17,10 +17,10 @@ body:
       label: Done when
       description: Concrete checks the Test and Review agents can use.
       placeholder: |
-        - README has a Factory section
-        - The section names the three labels
+        - README.md has a Status line
+        - The line says this is v0
     validations:
       required: true
   - type: markdown
     attributes:
-      value: After the issue looks right, add the `agent-dev` label to start the Dev agent. Do not add that label until you want a cloud agent to run.
+      value: Submitting this issue starts the Dev agent. It will open a PR into `dev`. You merge that PR. Do not add `agent-dev` unless a launch failed and you need a retry.
