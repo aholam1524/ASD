@@ -22,7 +22,9 @@ You describe work in Cursor
 
 2. Grant this repository to the Cursor GitHub app (clone + open PRs).
 
-3. Create long-lived branches if they do not exist (the factory will also create them from `main` on first promote):
+3. Add repo secret **`FACTORY_GITHUB_TOKEN`**: a GitHub classic PAT (scope `repo`) or a fine-grained token with Contents, Issues, and Pull requests read/write, created as **your user**. The factory uses it to open PRs as you. PRs opened as `github-actions[bot]` sit on **Approve workflows** and follow-up jobs (including `test` → `main`) may never start. Without this secret those waits come back.
+
+4. Create long-lived branches if they do not exist (the factory will also create them from `main` on first promote):
 
    ```bash
    git fetch origin
@@ -33,7 +35,7 @@ You describe work in Cursor
    git checkout -b test && git push -u origin test
    ```
 
-4. Optional retry labels:
+5. Optional retry labels:
 
    ```bash
    gh label create agent-dev --color 1D76DB --description "Retry the Dev cloud agent"
@@ -44,6 +46,8 @@ You describe work in Cursor
 If `test` is branch-protected, allow GitHub Actions to merge or auto-merge into `test` will fail.
 
 In the repo: Settings → Actions → General → Workflow permissions → **Read and write**. Otherwise the factory cannot create `dev`/`test` or open promotion PRs.
+
+You do not approve workflow runs. You only merge PRs into `dev` after Review, and into `main` after Test.
 
 ## How to use it
 
