@@ -1,13 +1,13 @@
 # Agent factory
 
-Describe the work in Cursor chat in this repo. The agent files a GitHub issue; that starts Dev. Code moves `feature/N-slug` → `dev` → `test` → `main`. You merge into `dev` and `main`. Merge into `test` is automatic when the Test agent reports PASS and CI is green.
+Describe the work in Cursor chat in this repo. The agent files a GitHub issue; that **queues** the work (label `factory-queued`). You run **Start factory** in Actions to begin Dev on the oldest queued issue. Code moves `feature/N-slug` → `dev` → `test` → `main`. You merge into `dev` and `main`. Merge into `test` is automatic when the Test agent reports PASS and CI is green.
 
 When Dev pushes `feature/*`, the factory opens a PR **into `dev`**, adds `agent-review`, and starts Review (even if the Dev agent forgot to open the PR).
 
 ```text
 You describe work in Cursor
-    → Agent files a GitHub issue
-    → Dev agent: branch feature/<issue>-<slug>
+    → Agent files a GitHub issue (queued)
+    → Start factory (Actions) → Dev agent: branch feature/<issue>-<slug>
     → Push opens PR into dev, labels agent-review, starts Review
     → You merge into dev
     → Factory opens PR dev → test and starts Test
@@ -51,10 +51,17 @@ In the repo: Settings → Actions → General → Workflow permissions → **Rea
 
 You do not approve workflow runs. You only merge PRs into `dev` after Review, and into `main` after Test.
 
+## How to start
+
+1. Open [Start factory](https://github.com/aholam1524/ASD/actions/workflows/start-factory.yml) in GitHub Actions.
+2. Click **Run workflow** (no inputs).
+
+That starts Dev on the oldest open issue with the `factory-queued` label. If the queue is empty, the run succeeds and does nothing. If a `feature/*` → `dev` PR is already open, Dev is not started until that PR is merged (or add `agent-dev` on a specific issue to retry that issue only).
+
 ## How to use it
 
-1. In Cursor, say what you want built (for example: "add a clamp helper in clamp/"). The agent creates the issue. No label required.
-2. Wait for a PR from `feature/<number>-<slug>` **into `dev`** (opened on push if Dev only pushed a branch). Review starts automatically.
+1. In Cursor, say what you want built (for example: "add a clamp helper in clamp/"). The agent creates the issue; it is queued automatically. No label required.
+2. Run **Start factory** (see above). Wait for a PR from `feature/<number>-<slug>` **into `dev`** (opened on push if Dev only pushed a branch). Review starts automatically.
 3. You merge that PR into `dev`.
 4. The factory opens `dev` → `test`, runs Test, then CI. On PASS + green CI it merges into `test` and opens `test` → `main`.
 5. Read Test comments on the main PR. You merge into `main`.
@@ -67,4 +74,4 @@ Watch SDK-launched agents in Cursor: Agents → Filter → Source → SDK.
 
 ## Smoke test
 
-In Cursor, ask to file an issue for a one-line README Status note. Confirm the issue opens, Dev launches, a PR appears into `dev` after the feature branch is pushed, and Review is labeled. Merge into `dev`, then merge `test` → `main` yourself.
+In Cursor, ask to file an issue for a one-line README Status note. Confirm the issue opens with `factory-queued`, run **Start factory**, then confirm Dev launches and a PR appears into `dev` after the feature branch is pushed, with Review labeled. Merge into `dev`, then merge `test` → `main` yourself.
