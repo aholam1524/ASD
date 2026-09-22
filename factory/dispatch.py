@@ -99,8 +99,125 @@ def main(argv: list[str] | None = None) -> int:
     if event_name == "issue_comment" and action == "created":
         return handle_issue_comment(owner_repo, repo_url, owner, event)
 
+    if event_name == "push":
+        return handle_feature_push(owner_repo, repo_url, owner, event)
+
     print(f"Ignoring event {event_name}.{action}")
     return 0
+
+
+FEATURE_BRANCH_RE = re.compile(r"^feature/(\d+)(?:-|$)")
+
+
+def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict) -> int:
+    ref = event.get("ref") or ""
+    prefix = "refs/heads/"
+    if not ref.startswith(prefix):
+        print(f"Ignoring push ref {ref!r}")
+        return 0
+    branch = ref[len(prefix) :]
+    if not branch.startswith("feature/"):
+        print(f"Ignoring push to {branch}")
+        return 0
+
+    match = FEATURE_BRANCH_RE.match(branch)
+    if not match:
+        print(f"Feature branch {branch} has no leading issue number; ignoring")
+        return 0
+    issue_number = int(match.group(1))
+
+    existing = gh_json(
+        [
+            "pr",
+            "list",
+            "--repo",
+            owner_repo,
+            "--base",
+            DEV_BRANCH,
+            "--head",
+            f"{owner}:{branch}",
+            "--state",
+            "open",
+            "--json",
+            "number",
+        ]
+    )
+    if existing:
+        pr_number = existing[0]["number"]
+        print(f"Reusing open PR #{pr_number} ({branch} -> {DEV_BRANCH})")
+    else:
+        issue = gh_json(
+            ["issue", "view", str(issue_number), "--repo", owner_repo, "--json", "title"]
+        )
+        title = issue.get("title") or branch
+        body = f"Closes #{issue_number}\n"
+        created = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                owner_repo,
+                "--base",
+                DEV_BRANCH,
+                "--head",
+                branch,
+                "--title",
+                title,
+                "--body",
+                body,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if created.returncode != 0:
+            combined = (created.stdout or "") + (created.stderr or "")
+            print(combined, file=sys.stderr)
+            created.check_returncode()
+        listed = gh_json(
+            [
+                "pr",
+                "list",
+                "--repo",
+                owner_repo,
+                "--base",
+                DEV_BRANCH,
+                "--head",
+                f"{owner}:{branch}",
+                "--state",
+                "open",
+                "--json",
+                "number",
+            ]
+        )
+        if not listed:
+            raise RuntimeError(f"Created {branch} -> {DEV_BRANCH} PR but could not find it")
+        pr_number = listed[0]["number"]
+        print(f"Opened PR #{pr_number} ({branch} -> {DEV_BRANCH})")
+
+    add_pr_label(owner_repo, pr_number, "agent-review")
+    return launch_role_on_pr(owner_repo, repo_url, "review", pr_number)
+
+
+def add_pr_label(owner_repo: str, pr_number: int, label: str) -> None:
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "edit",
+            str(pr_number),
+            "--repo",
+            owner_repo,
+            "--add-label",
+            label,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"Could not add label {label!r} to PR #{pr_number}: {(result.stderr or result.stdout).strip()}")
+        return
+    print(f"Added label {label!r} to PR #{pr_number}")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:

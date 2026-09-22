@@ -6,6 +6,7 @@ Rules:
 - Start from the `dev` branch. Create and push a branch named exactly as given in "Required Git branch name" (`feature/<issue-number>-<slug>`).
 - Open one pull request **into `dev`**, not `main` and not `test`. Use that feature branch as the head.
 - Put `Closes #<issue-number>` in the PR body.
+- If a pull request into `dev` from this branch already exists, do not open another. Continue or stop; do not duplicate the PR.
 - Work only on what the issue asks for. Do not refactor unrelated code.
 - If the repo has tests, add or update tests for the behavior you change.
 - Do not merge the pull request.
