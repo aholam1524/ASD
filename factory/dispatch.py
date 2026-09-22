@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         if base == MAIN_BRANCH:
             mark_issues_waiting_main_done(owner_repo)
             print(f"Merged PR #{pr['number']} into {MAIN_BRANCH}; marked factory-done")
-            return 0
+            return start_oldest_factory_queued(owner_repo, repo_url)
         print(f"Merged PR is not into {DEV_BRANCH} or {TEST_BRANCH}; ignoring")
         return 0
 
@@ -1012,6 +1012,11 @@ def oldest_queued_issue(owner_repo: str) -> dict | None:
     if not issues:
         return None
     return min(issues, key=lambda item: item["number"])
+
+
+def start_oldest_factory_queued(owner_repo: str, repo_url: str) -> int:
+    """Start Dev on the oldest open issue with `factory-queued` (Start factory)."""
+    return handle_start_factory(owner_repo, repo_url)
 
 
 def handle_start_factory(owner_repo: str, repo_url: str) -> int:
