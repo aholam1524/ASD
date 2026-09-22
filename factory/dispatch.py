@@ -91,10 +91,13 @@ def main(argv: list[str] | None = None) -> int:
         if not pr.get("merged"):
             print("PR closed without merge; ignoring")
             return 0
-        if (pr.get("base", {}).get("ref") or "") != DEV_BRANCH:
-            print("Merged PR is not into dev; ignoring")
-            return 0
-        return promote_dev_to_test(owner_repo, repo_url, owner, pr)
+        base = pr.get("base", {}).get("ref") or ""
+        if base == DEV_BRANCH:
+            return promote_dev_to_test(owner_repo, repo_url, owner, pr)
+        if base == TEST_BRANCH:
+            return promote_test_to_main(owner_repo, repo_url, owner)
+        print(f"Merged PR is not into {DEV_BRANCH} or {TEST_BRANCH}; ignoring")
+        return 0
 
     if event_name == "issue_comment" and action == "created":
         return handle_issue_comment(owner_repo, repo_url, owner, event)
