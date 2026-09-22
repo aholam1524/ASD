@@ -27,6 +27,7 @@ LABEL_ROLES = {
     "agent-dev": "dev",
     "agent-test": "test",
     "agent-review": "review",
+    "agent-fix": "fix",
 }
 PASS_MARKER = "<!-- factory:test-result:pass -->"
 FAIL_MARKER = "<!-- factory:test-result:fail -->"
@@ -189,6 +190,27 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
             )
         print(f"Opened PR #{pr_number} ({branch} -> {DEV_BRANCH})")
 
+    fix_marker = role_marker("fix", pr_number)
+    if comment_has_marker(owner_repo, pr_number, fix_marker):
+        fix_count = count_marker_occurrences(owner_repo, pr_number, fix_marker)
+        test_after_count = count_test_after_fix_launches(owner_repo, pr_number)
+        if fix_count > test_after_count:
+            attempt = test_after_count + 1
+            marker = after_fix_test_marker(pr_number, attempt)
+            print(f"Post-fix push on PR #{pr_number}; launching Test (after fix #{attempt})")
+            return launch_role_on_pr(
+                owner_repo,
+                repo_url,
+                "test",
+                pr_number,
+                marker=marker,
+                idempotency_key=f"factory-test-after-fix-{owner_repo}-{pr_number}-{attempt}",
+            )
+        print(
+            f"Fixer already ran for PR #{pr_number} and Test-after-fix is up to date; ignoring push"
+        )
+        return 0
+
     add_pr_label(owner_repo, pr_number, "agent-review")
     return launch_role_on_pr(owner_repo, repo_url, "review", pr_number)
 
@@ -233,7 +255,7 @@ def add_pr_label(owner_repo: str, pr_number: int, label: str) -> None:
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Agent factory dispatcher")
-    parser.add_argument("--role", choices=["dev", "test", "review"])
+    parser.add_argument("--role", choices=["dev", "test", "review", "fix"])
     parser.add_argument("--pr", type=int)
     args = parser.parse_args(argv)
     if (args.role is None) != (args.pr is None):
@@ -260,7 +282,7 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
     if role == "dev" and is_pr:
         post_comment(owner_repo, number, f"`agent-dev` is only valid on issues. Ignoring on PR #{number}.")
         return 0
-    if role in {"test", "review"} and not is_pr:
+    if role in {"test", "review", "fix"} and not is_pr:
         post_comment(
             owner_repo,
             number,
@@ -276,6 +298,13 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
     html_url = target.get("html_url") or (
         f"{repo_url}/{'pull' if is_pr else 'issues'}/{number}"
     )
+    force = role == "fix"
+    idempotency_key = None
+    if force:
+        fix_marker = role_marker("fix", number)
+        next_attempt = count_marker_occurrences(owner_repo, number, fix_marker) + 1
+        if next_attempt > 1:
+            idempotency_key = f"factory-fix-{owner_repo}-{number}-{next_attempt}"
     return launch_role(
         owner_repo,
         repo_url,
@@ -285,6 +314,8 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
         body=target.get("body") or "",
         html_url=html_url,
         is_pr=is_pr,
+        force=force,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -300,11 +331,67 @@ def handle_issue_comment(owner_repo: str, repo_url: str, owner: str, event: dict
     if user in {"github-actions[bot]", "github-actions"}:
         print("Ignoring comment from github-actions")
         return 0
-    if PASS_MARKER not in body:
-        print("Comment has no test PASS marker; ignoring")
+    if PASS_MARKER in body:
+        return handle_test_pass(owner_repo, repo_url, owner, issue["number"])
+    if FAIL_MARKER in body:
+        return handle_test_fail(owner_repo, repo_url, issue["number"])
+    print("Comment has no test result marker; ignoring")
+    return 0
+
+
+def handle_test_fail(owner_repo: str, repo_url: str, number: int) -> int:
+    pr = gh_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            owner_repo,
+            "--json",
+            "number,title,body,url,state,baseRefName,headRefName",
+        ]
+    )
+    if pr.get("state") != "OPEN":
+        print(f"PR #{number} is not open; ignoring")
         return 0
 
-    number = issue["number"]
+    base = pr.get("baseRefName") or ""
+    head = pr.get("headRefName") or ""
+
+    if base == DEV_BRANCH and head.startswith("feature/"):
+        fix_marker = role_marker("fix", number)
+        if comment_has_marker(owner_repo, number, fix_marker):
+            post_comment(
+                owner_repo,
+                number,
+                "Test reported FAIL, but **Fixer** already ran for this PR. "
+                "Not launching another Fixer. Add the `agent-fix` label to retry Fixer.",
+            )
+            print(f"Fixer marker already present on PR #{number}; skipping")
+            return 0
+        print(f"Test FAIL on feature PR #{number}; launching Fixer")
+        return launch_role_on_pr(owner_repo, repo_url, "fix", number)
+
+    if is_promotion_pr(base, head):
+        post_comment(
+            owner_repo,
+            number,
+            "Test reported FAIL on a promotion PR. There is no automatic merge and no Fixer for this PR.",
+        )
+        print(f"Test FAIL on promotion PR #{number}; not launching Fixer")
+        return 0
+
+    print(f"Test FAIL on PR #{number} ({head} -> {base}); ignoring")
+    return 0
+
+
+def is_promotion_pr(base: str, head: str) -> bool:
+    return (base == TEST_BRANCH and head == DEV_BRANCH) or (
+        base == MAIN_BRANCH and head == TEST_BRANCH
+    )
+
+
+def handle_test_pass(owner_repo: str, repo_url: str, owner: str, number: int) -> int:
     pr = gh_json(["pr", "view", str(number), "--repo", owner_repo, "--json",
                   "number,title,body,url,state,mergedAt,baseRefName,headRefName"])
     if pr.get("state") != "OPEN":
@@ -465,7 +552,16 @@ def ensure_promotion_pr(
     return pr_number
 
 
-def launch_role_on_pr(owner_repo: str, repo_url: str, role: str, pr_number: int) -> int:
+def launch_role_on_pr(
+    owner_repo: str,
+    repo_url: str,
+    role: str,
+    pr_number: int,
+    *,
+    marker: str | None = None,
+    idempotency_key: str | None = None,
+    force: bool = False,
+) -> int:
     pr = gh_json(
         ["pr", "view", str(pr_number), "--repo", owner_repo, "--json", "number,title,body,url"]
     )
@@ -478,7 +574,18 @@ def launch_role_on_pr(owner_repo: str, repo_url: str, role: str, pr_number: int)
         body=pr.get("body") or "",
         html_url=pr.get("url") or f"{repo_url}/pull/{pr_number}",
         is_pr=True,
+        marker=marker,
+        idempotency_key=idempotency_key,
+        force=force,
     )
+
+
+def role_marker(role: str, number: int) -> str:
+    return f"<!-- factory:{role}:{number} -->"
+
+
+def after_fix_test_marker(number: int, attempt: int) -> str:
+    return f"<!-- factory:test-after-fix:{number}:{attempt} -->"
 
 
 def launch_role(
@@ -491,14 +598,17 @@ def launch_role(
     body: str,
     html_url: str,
     is_pr: bool,
+    marker: str | None = None,
+    idempotency_key: str | None = None,
+    force: bool = False,
 ) -> int:
     api_key = os.environ.get("CURSOR_API_KEY", "").strip()
     if not api_key:
         print("CURSOR_API_KEY is not set", file=sys.stderr)
         return 1
 
-    marker = f"<!-- factory:{role}:{number} -->"
-    if comment_has_marker(owner_repo, number, marker):
+    marker = marker or role_marker(role, number)
+    if not force and comment_has_marker(owner_repo, number, marker):
         print(f"Already launched {role} for #{number}; skipping")
         return 0
 
@@ -528,6 +638,7 @@ def launch_role(
             repo=repo,
             prompt=prompt,
             metadata=metadata,
+            idempotency_key=idempotency_key,
         )
     except CursorAgentError as err:
         print(
@@ -555,6 +666,7 @@ def launch_agent(
     repo: CloudRepository,
     prompt: str,
     metadata: dict[str, str],
+    idempotency_key: str | None = None,
 ) -> tuple[str, str]:
     cloud_kwargs: dict = {
         "repos": [repo],
@@ -568,6 +680,7 @@ def launch_agent(
             number=number,
             prompt=prompt,
             cloud=CloudAgentOptions(**cloud_kwargs, metadata=metadata),
+            idempotency_key=idempotency_key,
         )
     except CursorAgentError as err:
         message = str(err).lower()
@@ -580,6 +693,7 @@ def launch_agent(
             number=number,
             prompt=prompt,
             cloud=CloudAgentOptions(**cloud_kwargs),
+            idempotency_key=idempotency_key,
         )
 
 
@@ -590,12 +704,15 @@ def _send(
     number: int,
     prompt: str,
     cloud: CloudAgentOptions,
+    idempotency_key: str | None = None,
 ) -> tuple[str, str]:
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    key = idempotency_key or f"factory-{role}-{repo}-{number}"
     with Agent.create(
         model=MODEL,
         api_key=api_key,
         name=f"factory-{role}-{number}",
-        idempotency_key=f"factory-{role}-{os.environ.get('GITHUB_REPOSITORY', '')}-{number}",
+        idempotency_key=key,
         cloud=cloud,
     ) as agent:
         run = agent.send(prompt)
@@ -712,7 +829,7 @@ def gh_json(args: list[str]):
     return json.loads(result.stdout or "null")
 
 
-def comment_has_marker(owner_repo: str, number: int, marker: str) -> bool:
+def issue_comment_bodies(owner_repo: str, number: int) -> str:
     result = subprocess.run(
         [
             "gh",
@@ -725,7 +842,20 @@ def comment_has_marker(owner_repo: str, number: int, marker: str) -> bool:
         capture_output=True,
         text=True,
     )
-    return marker in result.stdout
+    return result.stdout or ""
+
+
+def comment_has_marker(owner_repo: str, number: int, marker: str) -> bool:
+    return marker in issue_comment_bodies(owner_repo, number)
+
+
+def count_marker_occurrences(owner_repo: str, number: int, marker: str) -> int:
+    return issue_comment_bodies(owner_repo, number).count(marker)
+
+
+def count_test_after_fix_launches(owner_repo: str, number: int) -> int:
+    prefix = f"<!-- factory:test-after-fix:{number}:"
+    return issue_comment_bodies(owner_repo, number).count(prefix)
 
 
 def post_comment(owner_repo: str, number: int, body: str) -> None:
