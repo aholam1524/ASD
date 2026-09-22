@@ -84,7 +84,7 @@ You do not approve workflow runs. You only merge PRs into `dev` after Review, an
 ## How to start
 
 1. Open [Start factory](https://github.com/aholam1524/ASD/actions/workflows/start-factory.yml) in GitHub Actions.
-2. Click **Run workflow** (no inputs).
+2. Click **Run workflow** (no inputs). The branch dropdown does not matter—Start factory always runs factory code from `dev`.
 
 That starts Dev on the oldest open issue with the `factory-queued` label. If the queue is empty, the run succeeds and does nothing. If a `feature/*` → `dev` PR is already open, Dev is not started until that PR is merged (or add `agent-dev` on a specific issue to retry that issue only).
 
