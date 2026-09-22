@@ -56,12 +56,20 @@ class TestHandleTestPassMergeFailure:
         ), patch.object(
             dispatch, "comment_has_marker", return_value=False
         ), patch.object(
+            dispatch, "resolve_issue_number_for_pr", return_value=74
+        ), patch.object(
             dispatch, "launch_role_on_pr", return_value=0
         ) as launch_mock:
             result = handle_test_pass("o/r", "https://github.com/o/r", "o", 20)
 
         assert result == 0
-        launch_mock.assert_called_once_with("o/r", "https://github.com/o/r", "conflict", 20)
+        launch_mock.assert_called_once_with(
+            "o/r",
+            "https://github.com/o/r",
+            "conflict",
+            20,
+            factory_issue_number=74,
+        )
 
     def test_non_conflict_merge_error_does_not_launch_conflict(self) -> None:
         pr = _promotion_pr_dev_to_test(20)
@@ -114,6 +122,8 @@ class TestHandleConflictResolved:
         with patch.object(dispatch, "gh_json", return_value=pr), patch.object(
             dispatch, "count_marker_occurrences", side_effect=lambda _r, _n, m: 1 if m == resolved else 0
         ), patch.object(dispatch, "count_test_after_conflict_launches", return_value=0), patch.object(
+            dispatch, "resolve_issue_number_for_pr", return_value=74
+        ), patch.object(
             dispatch, "launch_role_on_pr", return_value=0
         ) as launch_mock:
             result = handle_conflict_resolved("o/r", "https://github.com/o/r", 20)
@@ -124,6 +134,7 @@ class TestHandleConflictResolved:
         assert args[2] == "test"
         assert kwargs["marker"] == expected_marker
         assert kwargs["idempotency_key"] == "factory-test-after-conflict-o/r-20-1"
+        assert kwargs["factory_issue_number"] == 74
 
     def test_second_conflict_resolved_launches_test_again(self) -> None:
         pr = _promotion_pr_dev_to_test(20)
