@@ -174,29 +174,35 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
             combined = (created.stdout or "") + (created.stderr or "")
             print(combined, file=sys.stderr)
             created.check_returncode()
-        listed = gh_json(
-            [
-                "pr",
-                "list",
-                "--repo",
-                owner_repo,
-                "--base",
-                DEV_BRANCH,
-                "--head",
-                f"{owner}:{branch}",
-                "--state",
-                "open",
-                "--json",
-                "number",
-            ]
+        pr_number = pr_number_from_create_output(created.stdout) or pr_number_from_create_output(
+            created.stderr
         )
-        if not listed:
-            raise RuntimeError(f"Created {branch} -> {DEV_BRANCH} PR but could not find it")
-        pr_number = listed[0]["number"]
+        if pr_number is None:
+            raise RuntimeError(
+                f"Created {branch} -> {DEV_BRANCH} PR but could not parse its number "
+                f"from: {(created.stdout or created.stderr or '').strip()!r}"
+            )
         print(f"Opened PR #{pr_number} ({branch} -> {DEV_BRANCH})")
 
     add_pr_label(owner_repo, pr_number, "agent-review")
     return launch_role_on_pr(owner_repo, repo_url, "review", pr_number)
+
+
+def pr_number_from_create_output(stdout: str) -> int | None:
+    text = (stdout or "").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        number = data.get("number")
+        if isinstance(number, int):
+            return number
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"/pull/(\d+)", text)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def add_pr_label(owner_repo: str, pr_number: int, label: str) -> None:
