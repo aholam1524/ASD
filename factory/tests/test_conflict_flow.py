@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 from unittest.mock import MagicMock, patch
 
 import dispatch
@@ -83,9 +85,11 @@ class TestHandleTestPassMergeFailure:
         ) as comment_mock, patch.object(dispatch, "run_ci", return_value=(True, "ok")), patch.object(
             dispatch.subprocess, "run", return_value=merge_fail
         ), patch.object(dispatch, "launch_role_on_pr") as launch_mock:
-            result = handle_test_pass("o/r", "https://github.com/o/r", "o", 20)
+            import pytest
 
-        assert result == 0
+            with pytest.raises(subprocess.CalledProcessError):
+                handle_test_pass("o/r", "https://github.com/o/r", "o", 20)
+
         launch_mock.assert_not_called()
         comment_mock.assert_called()
         last_body = comment_mock.call_args_list[-1][0][2]
