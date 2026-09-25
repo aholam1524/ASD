@@ -49,6 +49,25 @@ PROMOTE_TEST_TO_MAIN = "<!-- factory:promote:test-to-main -->"
 FACTORY_QUEUED_LABEL = "factory-queued"
 
 
+def repo_owner_login(owner_repo: str) -> str:
+    return owner_repo.split("/", 1)[0]
+
+
+def allowed_factory_authors(owner_repo: str) -> frozenset[str]:
+    allowed = {repo_owner_login(owner_repo)}
+    extra = os.environ.get("FACTORY_ALLOWED_AUTHORS", "").strip()
+    if extra:
+        allowed.update(part.strip() for part in extra.split(",") if part.strip())
+    return frozenset(allowed)
+
+
+def is_factory_author_allowed(owner_repo: str, login: str) -> bool:
+    author = (login or "").strip()
+    if not author:
+        return False
+    return author in allowed_factory_authors(owner_repo)
+
+
 def review_provider() -> str:
     value = os.environ.get("REVIEW_PROVIDER", "").strip().lower()
     if value in {"", "cursor"}:
@@ -377,6 +396,13 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
         return 0
 
     if role == "dev":
+        if not is_pr:
+            author = ((issue or {}).get("user") or {}).get("login") or ""
+            if not is_factory_author_allowed(owner_repo, author):
+                print(
+                    f"Ignoring issue #{number}: author {author!r} is not allowed to queue factory work"
+                )
+                return 0
         ensure_branch(DEV_BRANCH, MAIN_BRANCH)
         if not is_pr and skip_dev_if_feature_pr_open(owner_repo, number):
             return 0
@@ -1172,6 +1198,12 @@ def remove_issue_label(owner_repo: str, issue_number: int, label: str) -> None:
 
 def queue_issue_for_factory(owner_repo: str, issue: dict) -> int:
     number = issue["number"]
+    author = (issue.get("user") or {}).get("login") or ""
+    if not is_factory_author_allowed(owner_repo, author):
+        print(
+            f"Ignoring issue #{number}: author {author!r} is not allowed to queue factory work"
+        )
+        return 0
     set_factory_status(owner_repo, number, FACTORY_QUEUED_LABEL)
     post_comment(
         owner_repo,
@@ -1196,14 +1228,21 @@ def oldest_queued_issue(owner_repo: str) -> dict | None:
             "--state",
             "open",
             "--json",
-            "number,title,body,url",
+            "number,title,body,url,author",
             "--limit",
             "500",
         ]
     )
-    if not issues:
+    allowed = [
+        item
+        for item in issues
+        if is_factory_author_allowed(
+            owner_repo, ((item.get("author") or {}).get("login") or "")
+        )
+    ]
+    if not allowed:
         return None
-    return min(issues, key=lambda item: item["number"])
+    return min(allowed, key=lambda item: item["number"])
 
 
 def start_oldest_factory_queued(owner_repo: str, repo_url: str) -> int:
