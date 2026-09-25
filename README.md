@@ -4,6 +4,12 @@ Describe the work in Cursor chat in this repo. The agent files a GitHub issue; t
 
 When Dev pushes `feature/*`, the factory opens a PR **into `dev`**, adds `agent-review`, and starts Review (even if the Dev agent forgot to open the PR).
 
+## Who can queue work
+
+The factory only queues and starts Dev on issues **authored by allowed GitHub logins**. By default that is the repository owner (the user or org name in `owner/repo`). Optional environment variable **`FACTORY_ALLOWED_AUTHORS`** adds more logins as a comma-separated list (for example `teammate,bot-account`).
+
+Issues opened by anyone else are ignored: no `factory-queued` label, no queue comment, and **Start factory** will not pick them up even if the label was added manually. The `agent-dev` retry label on an issue follows the same rule. Retry labels on pull requests, pushes to `feature/*`, and promotion PRs are unchanged.
+
 ```text
 You describe work in Cursor
     → Agent files a GitHub issue (queued)

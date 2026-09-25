@@ -20,6 +20,7 @@ class TestQueueIssueOnOpen:
             "title": "Example",
             "body": "body",
             "html_url": "https://github.com/o/r/issues/42",
+            "user": {"login": "o"},
         }
         with patch.object(
             dispatch, "set_factory_status"
@@ -40,9 +41,9 @@ class TestQueueIssueOnOpen:
 class TestOldestQueuedIssue:
     def test_picks_lowest_issue_number(self) -> None:
         issues = [
-            {"number": 50, "title": "b"},
-            {"number": 12, "title": "a"},
-            {"number": 30, "title": "c"},
+            {"number": 50, "title": "b", "author": {"login": "o"}},
+            {"number": 12, "title": "a", "author": {"login": "o"}},
+            {"number": 30, "title": "c", "author": {"login": "o"}},
         ]
         with patch.object(dispatch, "gh_json", return_value=issues):
             found = oldest_queued_issue("o/r")
