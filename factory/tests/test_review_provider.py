@@ -96,7 +96,7 @@ class TestReviewProviderClaude:
                 "html_url": "https://github.com/o/r/pull/10",
             },
         }
-        with patch.object(
+        with patch.object(dispatch, "add_pr_label", return_value=True), patch.object(
             dispatch, "launch_review_delegated_to_claude", return_value=0
         ) as delegate_mock, patch.dict(
             "os.environ",
@@ -130,7 +130,7 @@ class TestReviewProviderClaude:
 
         with patch.object(dispatch, "gh_json", side_effect=gh_json_side_effect), patch.object(
             dispatch, "comment_has_marker", return_value=False
-        ), patch.object(dispatch, "add_pr_label") as label_mock, patch.object(
+        ), patch.object(dispatch, "add_pr_label", return_value=True) as label_mock, patch.object(
             dispatch, "launch_review_delegated_to_claude", return_value=0
         ) as delegate_mock, patch.dict(
             "os.environ",
