@@ -39,6 +39,9 @@ LABEL_ROLES = {
     "agent-fix": "fix",
     "agent-conflict": "conflict",
 }
+AGENT_ROLE_LABEL_SPECS: dict[str, tuple[str, str]] = {
+    "agent-review": ("5319E7", "Retry the Review cloud agent"),
+}
 PASS_MARKER = "<!-- factory:test-result:pass -->"
 FAIL_MARKER = "<!-- factory:test-result:fail -->"
 PROMOTE_DEV_TO_TEST = "<!-- factory:promote:dev-to-test -->"
@@ -229,7 +232,9 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
         )
         return 0
 
-    add_pr_label(owner_repo, pr_number, "agent-review")
+    if not add_pr_label(owner_repo, pr_number, "agent-review"):
+        if review_provider() == "claude":
+            return 1
     return launch_role_on_pr(owner_repo, repo_url, "review", pr_number)
 
 
@@ -250,25 +255,88 @@ def pr_number_from_create_output(stdout: str) -> int | None:
     return None
 
 
-def add_pr_label(owner_repo: str, pr_number: int, label: str) -> None:
-    result = subprocess.run(
-        [
-            "gh",
-            "pr",
-            "edit",
-            str(pr_number),
-            "--repo",
-            owner_repo,
-            "--add-label",
-            label,
-        ],
+def _gh_token_env() -> dict[str, str]:
+    env = os.environ.copy()
+    token = os.environ.get("FACTORY_GITHUB_TOKEN", "").strip()
+    if token:
+        env["GH_TOKEN"] = token
+        env["GITHUB_TOKEN"] = token
+    return env
+
+
+def _gh_run(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["gh", *args],
         capture_output=True,
         text=True,
+        env=_gh_token_env(),
+    )
+
+
+def ensure_agent_role_label(owner_repo: str, label: str) -> None:
+    spec = AGENT_ROLE_LABEL_SPECS.get(label)
+    if spec is None:
+        return
+    color, description = spec
+    result = _gh_run(
+        [
+            "label",
+            "create",
+            label,
+            "--repo",
+            owner_repo,
+            "--color",
+            color,
+            "--description",
+            description,
+        ]
     )
     if result.returncode != 0:
-        print(f"Could not add label {label!r} to PR #{pr_number}: {(result.stderr or result.stdout).strip()}")
-        return
+        combined = (result.stdout or "") + (result.stderr or "")
+        if "already exists" not in combined.lower():
+            print(
+                f"Could not create label {label!r}: {combined.strip()}",
+                file=sys.stderr,
+            )
+
+
+def add_pr_label(owner_repo: str, pr_number: int, label: str) -> bool:
+    labels_result = _gh_run(
+        [
+            "api",
+            f"repos/{owner_repo}/issues/{pr_number}",
+            "--jq",
+            ".labels[].name",
+        ]
+    )
+    if labels_result.returncode == 0:
+        existing = [
+            line.strip()
+            for line in (labels_result.stdout or "").splitlines()
+            if line.strip()
+        ]
+        if label in existing:
+            print(f"Label {label!r} already on PR #{pr_number}")
+            return True
+
+    ensure_agent_role_label(owner_repo, label)
+
+    add_result = _gh_run(
+        [
+            "api",
+            "-X",
+            "POST",
+            f"repos/{owner_repo}/issues/{pr_number}/labels",
+            "-f",
+            f"labels[]={label}",
+        ]
+    )
+    if add_result.returncode != 0:
+        combined = (add_result.stdout or "") + (add_result.stderr or "")
+        print(combined, file=sys.stderr)
+        return False
     print(f"Added label {label!r} to PR #{pr_number}")
+    return True
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -323,6 +391,9 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
         next_attempt = count_marker_occurrences(owner_repo, number, retry_marker) + 1
         if next_attempt > 1:
             idempotency_key = f"factory-{role}-{owner_repo}-{number}-{next_attempt}"
+    if role == "review" and not add_pr_label(owner_repo, number, "agent-review"):
+        if review_provider() == "claude":
+            return 1
     return launch_role(
         owner_repo,
         repo_url,
