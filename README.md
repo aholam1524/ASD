@@ -109,7 +109,7 @@ Set the environment variable **`REVIEW_PROVIDER`** on the factory dispatcher (fo
 | Value | Behavior |
 | --- | --- |
 | Unset or `cursor` | Review runs as a Cursor cloud agent (default). Requires `CURSOR_API_KEY`. |
-| `claude` | Review is **not** launched in Cursor. The dispatcher posts the usual idempotency marker comment, sets the ticket to `factory-waiting-dev`, and relies on a **Claude review workflow in the app repo (PX)** that runs when the `agent-review` label is added to the PR. |
+| `claude` | Review is **not** launched in Cursor. The dispatcher adds `agent-review` via the GitHub REST API (using `FACTORY_GITHUB_TOKEN`), posts the usual idempotency marker comment, sets the ticket to `factory-waiting-dev`, and relies on a **Claude review workflow in the app repo (PX)** that runs when the `agent-review` label is added to the PR. If that label cannot be added, the dispatcher Action fails. |
 
 With `REVIEW_PROVIDER=claude`, configure the PX repo with a workflow (for example `anthropics/claude-code-action`) triggered by `agent-review`. Review instructions stay in `factory/prompts/review.md` for that workflow to read.
 
