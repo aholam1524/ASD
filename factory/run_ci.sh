@@ -7,4 +7,9 @@ if [[ -z "$(find . -name 'test_*.py' -not -path './.git/*' -not -path './.asd-fa
 fi
 
 python -m pip install pytest -q
-python -m pytest
+
+if [[ -f requirements.txt && ! -f factory/dispatch.py ]]; then
+  python -m pip install -r requirements.txt -q
+fi
+
+python -m pytest --ignore=.asd-factory
