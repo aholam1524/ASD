@@ -102,6 +102,17 @@ Happy path needs no labels. To retry a failed launch: `agent-dev` on an **issue*
 
 Watch SDK-launched agents in Cursor: Agents → Filter → Source → SDK.
 
+## Review provider
+
+Set the environment variable **`REVIEW_PROVIDER`** on the factory dispatcher (for example in the workflow that runs `factory/dispatch.py`):
+
+| Value | Behavior |
+| --- | --- |
+| Unset or `cursor` | Review runs as a Cursor cloud agent (default). Requires `CURSOR_API_KEY`. |
+| `claude` | Review is **not** launched in Cursor. The dispatcher posts the usual idempotency marker comment, sets the ticket to `factory-waiting-dev`, and relies on a **Claude review workflow in the app repo (PX)** that runs when the `agent-review` label is added to the PR. |
+
+With `REVIEW_PROVIDER=claude`, configure the PX repo with a workflow (for example `anthropics/claude-code-action`) triggered by `agent-review`. Review instructions stay in `factory/prompts/review.md` for that workflow to read.
+
 ## Smoke test
 
 In Cursor, ask to file an issue for a one-line README Status note. Confirm the issue opens with `factory-queued`, run **Start factory**, then confirm Dev launches and a PR appears into `dev` after the feature branch is pushed, with Review labeled. Merge into `dev`, then merge `test` → `main` yourself.
