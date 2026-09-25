@@ -16,6 +16,7 @@ from pathlib import Path
 
 from cursor_sdk import Agent, CloudAgentOptions, CloudRepository, CursorAgentError
 
+from failure_report import report_factory_failure
 from status_labels import (
     apply_factory_status_for_launch,
     ensure_factory_status_labels,
@@ -252,8 +253,7 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
         return 0
 
     if not add_pr_label(owner_repo, pr_number, "agent-review"):
-        if review_provider() == "claude":
-            return 1
+        return 1
     return launch_role_on_pr(owner_repo, repo_url, "review", pr_number)
 
 
@@ -313,10 +313,8 @@ def ensure_agent_role_label(owner_repo: str, label: str) -> None:
     if result.returncode != 0:
         combined = (result.stdout or "") + (result.stderr or "")
         if "already exists" not in combined.lower():
-            print(
-                f"Could not create label {label!r}: {combined.strip()}",
-                file=sys.stderr,
-            )
+            print(combined, file=sys.stderr)
+            result.check_returncode()
 
 
 def add_pr_label(owner_repo: str, pr_number: int, label: str) -> bool:
@@ -418,8 +416,7 @@ def handle_label(owner_repo: str, repo_url: str, event: dict) -> int:
         if next_attempt > 1:
             idempotency_key = f"factory-{role}-{owner_repo}-{number}-{next_attempt}"
     if role == "review" and not add_pr_label(owner_repo, number, "agent-review"):
-        if review_provider() == "claude":
-            return 1
+        return 1
     return launch_role(
         owner_repo,
         repo_url,
@@ -673,7 +670,12 @@ def handle_test_pass(owner_repo: str, repo_url: str, owner: str, number: int) ->
             "CI passed but merge into `test` failed (not a merge conflict). Not launching Conflict.\n\n"
             f"```\n{combined[-4000:]}\n```",
         )
-        return 0
+        raise subprocess.CalledProcessError(
+            merge_result.returncode,
+            merge_result.args,
+            merge_result.stdout,
+            merge_result.stderr,
+        )
 
     post_comment(owner_repo, number, "CI passed. Merged into `test`.")
     merged = {**pr, "number": number}
@@ -720,7 +722,8 @@ def ensure_promotion_pr_has_ticket(
     )
     if result.returncode != 0:
         combined = (result.stdout or "") + (result.stderr or "")
-        print(f"Could not add ticket to promotion PR #{pr_number}: {combined.strip()}")
+        print(combined, file=sys.stderr)
+        result.check_returncode()
 
 
 def promote_dev_to_test(owner_repo: str, repo_url: str, owner: str, merged_pr: dict) -> int:
@@ -1422,13 +1425,18 @@ def launch_comment(marker: str, role: str, agent_id: str, run_id: str) -> str:
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        code = main()
+        if code != 0:
+            report_factory_failure(exit_code=code)
+        raise SystemExit(code)
     except CursorAgentError as err:
         print(
             f"startup failed: {err.message}, retryable={err.is_retryable}",
             file=sys.stderr,
         )
+        report_factory_failure(err)
         raise SystemExit(1)
     except subprocess.CalledProcessError as err:
         print(f"github cli failed: {err}", file=sys.stderr)
+        report_factory_failure(err)
         raise SystemExit(1)
