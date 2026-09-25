@@ -77,7 +77,7 @@ You describe work in Cursor
    | `factory-conflict` | Conflict agent on the `dev`→`test` PR |
    | `factory-waiting-main` | `test`→`main` PR is open; you merge to `main` |
    | `factory-done` | Work merged to `main` |
-   | `factory-blocked` | Test failed again after Fixer; use `agent-fix` / `agent-test` to retry |
+   | `factory-blocked` | Test failed again after Fixer; a factory step failed (see the comment on the ticket); use `agent-fix` / `agent-test` to retry |
 
    Each ticket keeps **one** `factory-*` status label at a time (retry labels stay separate).
 
