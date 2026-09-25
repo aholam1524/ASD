@@ -690,13 +690,25 @@ def promote_test_to_main(
         print("Nothing to promote from test to main")
         return 0
     ensure_promotion_pr_has_ticket(owner_repo, pr_number, factory_issue)
-    return launch_role_on_pr(
-        owner_repo,
-        repo_url,
-        "test",
-        pr_number,
-        factory_issue_number=factory_issue,
-    )
+    if factory_issue is None:
+        factory_issue = resolve_issue_number_for_pr(owner_repo, pr_number)
+    if factory_issue is not None:
+        set_factory_status(owner_repo, factory_issue, "factory-waiting-main")
+    notice_marker = waiting_main_notice_marker(pr_number)
+    if not comment_has_marker(owner_repo, pr_number, notice_marker):
+        post_comment(
+            owner_repo,
+            pr_number,
+            f"{notice_marker}\n"
+            "Test already passed on the **`dev` → `test`** promotion PR. "
+            "No Test agent runs on this PR.\n\n"
+            "Merge this PR into **`main`** when you are ready.",
+        )
+    return 0
+
+
+def waiting_main_notice_marker(pr_number: int) -> str:
+    return f"<!-- factory:waiting-main-notice:{pr_number} -->"
 
 
 def ensure_promotion_pr(
