@@ -133,21 +133,24 @@ class TestLaunchSetsFactoryStatus:
         status_mock.assert_called_once()
 
 
-class TestApplyFactoryStatusForLaunch:
-    def test_test_on_main_pr_uses_waiting_main(self) -> None:
-        with patch.object(
-            status_labels,
-            "factory_status_for_test_pr",
-            return_value="factory-waiting-main",
-        ), patch.object(status_labels, "set_factory_status") as status_mock:
-            apply_factory_status_for_launch(
-                "o/r",
-                "test",
-                number=99,
-                is_pr=True,
-                factory_issue_number=66,
-            )
-        status_mock.assert_called_once_with("o/r", 66, "factory-waiting-main")
+class TestFactoryStatusForTestPr:
+    def test_main_promotion_uses_waiting_main_for_manual_retry(self) -> None:
+        gh_json = MagicMock(
+            return_value={"baseRefName": "main", "headRefName": "test"}
+        )
+        assert (
+            status_labels.factory_status_for_test_pr("o/r", 99, gh_json=gh_json)
+            == "factory-waiting-main"
+        )
+
+    def test_dev_to_test_promotion_uses_factory_test(self) -> None:
+        gh_json = MagicMock(
+            return_value={"baseRefName": "test", "headRefName": "dev"}
+        )
+        assert (
+            status_labels.factory_status_for_test_pr("o/r", 10, gh_json=gh_json)
+            == "factory-test"
+        )
 
 
 class TestMarkIssueFactoryDone:
