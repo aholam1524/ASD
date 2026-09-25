@@ -108,6 +108,10 @@ Happy path needs no labels. To retry a failed launch: `agent-dev` on an **issue*
 
 Watch SDK-launched agents in Cursor: Agents → Filter → Source → SDK.
 
+## App repo dependencies (PX)
+
+When the factory runs CI in an app repo workspace, `factory/run_ci.sh` installs that repo’s root **`requirements.txt`** (runtime and test dependencies such as Streamlit or pandas) before pytest. The factory repo itself is detected by `factory/dispatch.py` and does not install its own root `requirements.txt` in that step.
+
 ## Review provider
 
 Set the environment variable **`REVIEW_PROVIDER`** on the factory dispatcher (for example in the workflow that runs `factory/dispatch.py`):
