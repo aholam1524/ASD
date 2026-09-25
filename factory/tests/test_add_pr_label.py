@@ -122,7 +122,7 @@ class TestClaudeFatalOnLabelFailure:
         assert result == 1
         launch_mock.assert_not_called()
 
-    def test_feature_push_cursor_continues_on_label_failure(self) -> None:
+    def test_feature_push_cursor_exits_nonzero_on_label_failure(self) -> None:
         event = {"ref": "refs/heads/feature/66-my-feature"}
         with patch.object(dispatch, "gh_json", return_value=[{"number": 10}]), patch.object(
             dispatch, "comment_has_marker", return_value=False
@@ -138,8 +138,8 @@ class TestClaudeFatalOnLabelFailure:
             os.environ.pop("REVIEW_PROVIDER", None)
             result = handle_feature_push("o/r", "https://github.com/o/r", "o", event)
 
-        assert result == 0
-        launch_mock.assert_called_once()
+        assert result == 1
+        launch_mock.assert_not_called()
 
     def test_handle_label_exits_nonzero_for_claude(self) -> None:
         event = {
@@ -163,7 +163,7 @@ class TestClaudeFatalOnLabelFailure:
         assert result == 1
         launch_mock.assert_not_called()
 
-    def test_handle_label_cursor_continues_on_label_failure(self) -> None:
+    def test_handle_label_cursor_exits_nonzero_on_label_failure(self) -> None:
         event = {
             "label": {"name": "agent-review"},
             "pull_request": {
@@ -185,5 +185,5 @@ class TestClaudeFatalOnLabelFailure:
             os.environ.pop("REVIEW_PROVIDER", None)
             result = handle_label("o/r", "https://github.com/o/r", event)
 
-        assert result == 0
-        launch_mock.assert_called_once()
+        assert result == 1
+        launch_mock.assert_not_called()
