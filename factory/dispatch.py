@@ -46,6 +46,15 @@ PROMOTE_TEST_TO_MAIN = "<!-- factory:promote:test-to-main -->"
 FACTORY_QUEUED_LABEL = "factory-queued"
 
 
+def review_provider() -> str:
+    value = os.environ.get("REVIEW_PROVIDER", "").strip().lower()
+    if value in {"", "cursor"}:
+        return "cursor"
+    if value == "claude":
+        return "claude"
+    return "cursor"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     owner_repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -794,6 +803,46 @@ def role_marker(role: str, number: int) -> str:
     return f"<!-- factory:{role}:{number} -->"
 
 
+def claude_review_delegation_comment(marker: str) -> str:
+    return (
+        f"{marker}\n"
+        "**Review** delegated to the Claude review workflow (`REVIEW_PROVIDER=claude`).\n\n"
+        "The `agent-review` label triggers the app-repo workflow; no Cursor cloud agent was launched."
+    )
+
+
+def launch_review_delegated_to_claude(
+    owner_repo: str,
+    *,
+    number: int,
+    is_pr: bool,
+    marker: str,
+    force: bool,
+    factory_issue_number: int | None,
+) -> int:
+    if not force and comment_has_marker(owner_repo, number, marker):
+        print(f"Already launched review for #{number}; skipping")
+        apply_factory_status_for_launch(
+            owner_repo,
+            "review",
+            number=number,
+            is_pr=is_pr,
+            factory_issue_number=factory_issue_number,
+        )
+        return 0
+
+    post_comment(owner_repo, number, claude_review_delegation_comment(marker))
+    apply_factory_status_for_launch(
+        owner_repo,
+        "review",
+        number=number,
+        is_pr=is_pr,
+        factory_issue_number=factory_issue_number,
+    )
+    print(f"Delegated review for PR #{number} to Claude workflow (REVIEW_PROVIDER=claude)")
+    return 0
+
+
 def after_fix_test_marker(number: int, attempt: int) -> str:
     return f"<!-- factory:test-after-fix:{number}:{attempt} -->"
 
@@ -821,12 +870,22 @@ def launch_role(
     force: bool = False,
     factory_issue_number: int | None = None,
 ) -> int:
+    marker = marker or role_marker(role, number)
+    if role == "review" and review_provider() == "claude":
+        return launch_review_delegated_to_claude(
+            owner_repo,
+            number=number,
+            is_pr=is_pr,
+            marker=marker,
+            force=force,
+            factory_issue_number=factory_issue_number,
+        )
+
     api_key = os.environ.get("CURSOR_API_KEY", "").strip()
     if not api_key:
         print("CURSOR_API_KEY is not set", file=sys.stderr)
         return 1
 
-    marker = marker or role_marker(role, number)
     if not force and comment_has_marker(owner_repo, number, marker):
         print(f"Already launched {role} for #{number}; skipping")
         apply_factory_status_for_launch(
