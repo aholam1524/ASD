@@ -111,12 +111,10 @@ class TestReviewProviderClaude:
 
     def test_feature_push_launches_review_via_claude(self) -> None:
         event = {"ref": "refs/heads/feature/66-my-feature"}
-        pr_list = [{"number": 10}]
+        pr_list = [{"number": 10, "headRepositoryOwner": {"login": "o"}}]
         issue = {"title": "My feature"}
 
         def gh_json_side_effect(args: list[str]):
-            if args[:2] == ["pr", "list"]:
-                return pr_list
             if args[:2] == ["issue", "view"]:
                 return issue
             if args[:2] == ["pr", "view"]:
@@ -128,7 +126,9 @@ class TestReviewProviderClaude:
                 }
             raise AssertionError(f"unexpected gh_json: {args}")
 
-        with patch.object(dispatch, "gh_json", side_effect=gh_json_side_effect), patch.object(
+        with patch.object(dispatch, "list_open_prs_for_head", return_value=pr_list), patch.object(
+            dispatch, "gh_json", side_effect=gh_json_side_effect
+        ), patch.object(
             dispatch, "comment_has_marker", return_value=False
         ), patch.object(dispatch, "add_pr_label", return_value=True) as label_mock, patch.object(
             dispatch, "launch_review_delegated_to_claude", return_value=0
