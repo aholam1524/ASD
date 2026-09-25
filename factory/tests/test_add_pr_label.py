@@ -108,7 +108,11 @@ class TestEnsureAgentRoleLabel:
 class TestClaudeFatalOnLabelFailure:
     def test_feature_push_exits_nonzero_for_claude(self) -> None:
         event = {"ref": "refs/heads/feature/66-my-feature"}
-        with patch.object(dispatch, "gh_json", return_value=[{"number": 10}]), patch.object(
+        with patch.object(
+            dispatch,
+            "list_open_prs_for_head",
+            return_value=[{"number": 10, "headRepositoryOwner": {"login": "o"}}],
+        ), patch.object(
             dispatch, "comment_has_marker", return_value=False
         ), patch.object(dispatch, "add_pr_label", return_value=False), patch.object(
             dispatch, "launch_role_on_pr"
@@ -124,7 +128,11 @@ class TestClaudeFatalOnLabelFailure:
 
     def test_feature_push_cursor_exits_nonzero_on_label_failure(self) -> None:
         event = {"ref": "refs/heads/feature/66-my-feature"}
-        with patch.object(dispatch, "gh_json", return_value=[{"number": 10}]), patch.object(
+        with patch.object(
+            dispatch,
+            "list_open_prs_for_head",
+            return_value=[{"number": 10, "headRepositoryOwner": {"login": "o"}}],
+        ), patch.object(
             dispatch, "comment_has_marker", return_value=False
         ), patch.object(dispatch, "add_pr_label", return_value=False), patch.object(
             dispatch, "launch_role_on_pr", return_value=0

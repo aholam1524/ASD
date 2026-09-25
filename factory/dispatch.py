@@ -173,21 +173,8 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
         print(f"Feature branch {branch} has no leading issue number; ignoring")
         return 0
 
-    existing = gh_json(
-        [
-            "pr",
-            "list",
-            "--repo",
-            owner_repo,
-            "--base",
-            DEV_BRANCH,
-            "--head",
-            f"{owner}:{branch}",
-            "--state",
-            "open",
-            "--json",
-            "number",
-        ]
+    existing = list_open_prs_for_head(
+        owner_repo, owner, base=DEV_BRANCH, head=branch, json_fields="number"
     )
     if existing:
         pr_number = existing[0]["number"]
@@ -219,17 +206,34 @@ def handle_feature_push(owner_repo: str, repo_url: str, owner: str, event: dict)
         )
         if created.returncode != 0:
             combined = (created.stdout or "") + (created.stderr or "")
-            print(combined, file=sys.stderr)
-            created.check_returncode()
-        pr_number = pr_number_from_create_output(created.stdout) or pr_number_from_create_output(
-            created.stderr
-        )
-        if pr_number is None:
-            raise RuntimeError(
-                f"Created {branch} -> {DEV_BRANCH} PR but could not parse its number "
-                f"from: {(created.stdout or created.stderr or '').strip()!r}"
+            recovered = resolve_pr_number_after_create_failure(
+                owner_repo, owner, base=DEV_BRANCH, head=branch, combined=combined
             )
-        print(f"Opened PR #{pr_number} ({branch} -> {DEV_BRANCH})")
+            if recovered is not None:
+                pr_number = recovered
+                print(f"Reusing existing PR #{pr_number} ({branch} -> {DEV_BRANCH})")
+            else:
+                print(combined, file=sys.stderr)
+                created.check_returncode()
+                pr_number = pr_number_from_create_output(created.stdout) or (
+                    pr_number_from_create_output(created.stderr)
+                )
+                if pr_number is None:
+                    raise RuntimeError(
+                        f"Created {branch} -> {DEV_BRANCH} PR but could not parse its number "
+                        f"from: {(created.stdout or created.stderr or '').strip()!r}"
+                    )
+                print(f"Opened PR #{pr_number} ({branch} -> {DEV_BRANCH})")
+        else:
+            pr_number = pr_number_from_create_output(created.stdout) or (
+                pr_number_from_create_output(created.stderr)
+            )
+            if pr_number is None:
+                raise RuntimeError(
+                    f"Created {branch} -> {DEV_BRANCH} PR but could not parse its number "
+                    f"from: {(created.stdout or created.stderr or '').strip()!r}"
+                )
+            print(f"Opened PR #{pr_number} ({branch} -> {DEV_BRANCH})")
 
     fix_marker = role_marker("fix", pr_number)
     if comment_has_marker(owner_repo, pr_number, fix_marker):
@@ -271,6 +275,74 @@ def pr_number_from_create_output(stdout: str) -> int | None:
     match = re.search(r"/pull/(\d+)", text)
     if match:
         return int(match.group(1))
+    return None
+
+
+def filter_open_prs_by_head_owner(prs: list[dict], owner: str) -> list[dict]:
+    filtered: list[dict] = []
+    for pr in prs:
+        head_owner = pr.get("headRepositoryOwner")
+        login = head_owner.get("login") if isinstance(head_owner, dict) else None
+        if login == owner:
+            filtered.append(pr)
+    return filtered
+
+
+def list_open_prs_for_head(
+    owner_repo: str,
+    owner: str,
+    *,
+    base: str,
+    head: str,
+    json_fields: str,
+) -> list[dict]:
+    fields = json_fields
+    if "headRepositoryOwner" not in fields:
+        fields = f"{fields},headRepositoryOwner"
+    prs = gh_json(
+        [
+            "pr",
+            "list",
+            "--repo",
+            owner_repo,
+            "--base",
+            base,
+            "--head",
+            head,
+            "--state",
+            "open",
+            "--json",
+            fields,
+        ]
+    )
+    if not isinstance(prs, list):
+        return []
+    return filter_open_prs_by_head_owner(prs, owner)
+
+
+def pr_create_failure_indicates_existing(combined: str) -> bool:
+    return "already exists" in combined.lower()
+
+
+def resolve_pr_number_after_create_failure(
+    owner_repo: str,
+    owner: str,
+    *,
+    base: str,
+    head: str,
+    combined: str,
+    json_fields: str = "number",
+) -> int | None:
+    if not pr_create_failure_indicates_existing(combined):
+        return None
+    parsed = pr_number_from_create_output(combined)
+    if parsed is not None:
+        return parsed
+    existing = list_open_prs_for_head(
+        owner_repo, owner, base=base, head=head, json_fields=json_fields
+    )
+    if existing:
+        return int(existing[0]["number"])
     return None
 
 
@@ -821,21 +893,8 @@ def ensure_promotion_pr(
     body: str,
     marker: str,
 ) -> int | None:
-    existing = gh_json(
-        [
-            "pr",
-            "list",
-            "--repo",
-            owner_repo,
-            "--base",
-            base,
-            "--head",
-            f"{owner}:{head}",
-            "--state",
-            "open",
-            "--json",
-            "number,body",
-        ]
+    existing = list_open_prs_for_head(
+        owner_repo, owner, base=base, head=head, json_fields="number,body"
     )
     if existing:
         number = existing[0]["number"]
@@ -866,6 +925,17 @@ def ensure_promotion_pr(
         if "no commits between" in combined.lower() or "already up-to-date" in combined.lower():
             print(combined.strip())
             return None
+        recovered = resolve_pr_number_after_create_failure(
+            owner_repo,
+            owner,
+            base=base,
+            head=head,
+            combined=combined,
+            json_fields="number,body",
+        )
+        if recovered is not None:
+            print(f"Reusing existing promotion PR #{recovered} ({head} -> {base})")
+            return recovered
         print(combined, file=sys.stderr)
         created.check_returncode()
 
