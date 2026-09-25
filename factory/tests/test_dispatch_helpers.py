@@ -49,7 +49,7 @@ class TestEnsurePromotionPr:
         create_result.stdout = "https://github.com/acme/repo/pull/777\n"
         create_result.stderr = ""
 
-        with patch.object(dispatch, "gh_json", return_value=[]), patch.object(
+        with patch.object(dispatch, "list_open_prs_for_head", return_value=[]), patch.object(
             dispatch.subprocess, "run", return_value=create_result
         ) as run_mock:
             pr_number = ensure_promotion_pr(

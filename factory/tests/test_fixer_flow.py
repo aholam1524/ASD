@@ -87,14 +87,14 @@ class TestHandleTestFail:
 class TestHandleFeaturePushAfterFix:
     def test_post_fix_push_launches_test_after_fix_once(self) -> None:
         event = {"ref": "refs/heads/feature/10-something"}
-        pr_list = [{"number": 10}]
+        pr_list = [{"number": 10, "headRepositoryOwner": {"login": "o"}}]
         fix_marker = role_marker("fix", 10)
         expected_marker = after_fix_test_marker(10, 1)
 
         def has_marker(_repo: str, _num: int, marker: str) -> bool:
             return marker == fix_marker
 
-        with patch.object(dispatch, "gh_json", return_value=pr_list), patch.object(
+        with patch.object(dispatch, "list_open_prs_for_head", return_value=pr_list), patch.object(
             dispatch, "comment_has_marker", side_effect=has_marker
         ), patch.object(dispatch, "count_marker_occurrences", return_value=1), patch.object(
             dispatch, "count_test_after_fix_launches", return_value=0
@@ -115,14 +115,14 @@ class TestHandleFeaturePushAfterFix:
 
     def test_second_fix_attempt_push_launches_test_after_fix_again(self) -> None:
         event = {"ref": "refs/heads/feature/10-something"}
-        pr_list = [{"number": 10}]
+        pr_list = [{"number": 10, "headRepositoryOwner": {"login": "o"}}]
         fix_marker = role_marker("fix", 10)
         expected_marker = after_fix_test_marker(10, 2)
 
         def has_marker(_repo: str, _num: int, marker: str) -> bool:
             return marker == fix_marker
 
-        with patch.object(dispatch, "gh_json", return_value=pr_list), patch.object(
+        with patch.object(dispatch, "list_open_prs_for_head", return_value=pr_list), patch.object(
             dispatch, "comment_has_marker", side_effect=has_marker
         ), patch.object(dispatch, "count_marker_occurrences", return_value=2), patch.object(
             dispatch, "count_test_after_fix_launches", return_value=1
@@ -139,13 +139,13 @@ class TestHandleFeaturePushAfterFix:
 
     def test_post_fix_push_skips_when_test_after_fix_caught_up(self) -> None:
         event = {"ref": "refs/heads/feature/10-something"}
-        pr_list = [{"number": 10}]
+        pr_list = [{"number": 10, "headRepositoryOwner": {"login": "o"}}]
         fix_marker = role_marker("fix", 10)
 
         def has_marker(_repo: str, _num: int, marker: str) -> bool:
             return marker == fix_marker
 
-        with patch.object(dispatch, "gh_json", return_value=pr_list), patch.object(
+        with patch.object(dispatch, "list_open_prs_for_head", return_value=pr_list), patch.object(
             dispatch, "comment_has_marker", side_effect=has_marker
         ), patch.object(dispatch, "count_marker_occurrences", return_value=1), patch.object(
             dispatch, "count_test_after_fix_launches", return_value=1
