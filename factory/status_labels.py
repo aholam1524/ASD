@@ -30,10 +30,10 @@ LABEL_CREATE_SPECS: tuple[tuple[str, str, str], ...] = (
     ("factory-dev", "1D76DB", "Dev agent running"),
     ("factory-review", "5319E7", "Review agent on feature PR"),
     ("factory-waiting-dev", "BFDADC", "Review done; merge feature PR into dev"),
-    ("factory-test", "0E8A16", "Test agent on promotion PR"),
+    ("factory-test", "0E8A16", "Test agent on dev→test promotion PR"),
     ("factory-fixer", "D93F0B", "Fixer agent on feature PR"),
     ("factory-conflict", "FBCA04", "Conflict agent on dev→test PR"),
-    ("factory-waiting-main", "FEF2C0", "Test on test→main PR; merge to main"),
+    ("factory-waiting-main", "FEF2C0", "test→main PR open; merge to main"),
     ("factory-done", "006B75", "Work merged to main"),
     ("factory-blocked", "B60205", "Test failed after Fixer; manual retry"),
 )
