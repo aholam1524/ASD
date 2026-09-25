@@ -12,7 +12,7 @@ You describe work in Cursor
     → You merge into dev
     → Factory opens PR dev → test and starts Test
     → Test PASS + CI green → automatic merge into test
-    → Factory opens PR test → main and starts Test
+    → Factory opens PR test → main (Test already ran on dev → test)
     → You merge into main
 ```
 
@@ -52,10 +52,10 @@ You describe work in Cursor
    gh label create factory-dev --color 1D76DB --description "Dev agent running"
    gh label create factory-review --color 5319E7 --description "Review agent on feature PR"
    gh label create factory-waiting-dev --color BFDADC --description "Review done; merge feature PR into dev"
-   gh label create factory-test --color 0E8A16 --description "Test agent on promotion PR"
+   gh label create factory-test --color 0E8A16 --description "Test agent on dev→test promotion PR"
    gh label create factory-fixer --color D93F0B --description "Fixer agent on feature PR"
    gh label create factory-conflict --color FBCA04 --description "Conflict agent on dev→test PR"
-   gh label create factory-waiting-main --color FEF2C0 --description "Test on test→main PR; merge to main"
+   gh label create factory-waiting-main --color FEF2C0 --description "test→main PR open; merge to main"
    gh label create factory-done --color 006B75 --description "Work merged to main"
    gh label create factory-blocked --color B60205 --description "Test failed after Fixer; manual retry"
    ```
@@ -66,10 +66,10 @@ You describe work in Cursor
    | `factory-dev` | Dev agent running |
    | `factory-review` | (Reserved) Review agent on the feature PR |
    | `factory-waiting-dev` | Review agent launched; merge the feature PR into `dev` when Review finishes |
-   | `factory-test` | Test agent on a promotion PR (`dev`→`test` or re-test after fix) |
+   | `factory-test` | Test agent on the `dev`→`test` promotion PR (or re-test after fix/conflict) |
    | `factory-fixer` | Fixer agent on the feature PR |
    | `factory-conflict` | Conflict agent on the `dev`→`test` PR |
-   | `factory-waiting-main` | Test on `test`→`main`; you merge to `main` |
+   | `factory-waiting-main` | `test`→`main` PR is open; you merge to `main` |
    | `factory-done` | Work merged to `main` |
    | `factory-blocked` | Test failed again after Fixer; use `agent-fix` / `agent-test` to retry |
 
@@ -79,7 +79,7 @@ If `test` is branch-protected, allow GitHub Actions to merge or auto-merge into 
 
 In the repo: Settings → Actions → General → Workflow permissions → **Read and write**. Otherwise the factory cannot create `dev`/`test` or open promotion PRs.
 
-You do not approve workflow runs. You only merge PRs into `dev` after Review, and into `main` after Test.
+You do not approve workflow runs. You only merge PRs into `dev` after Review, and into `main` when the `test`→`main` promotion PR is ready.
 
 ## How to start
 
@@ -93,8 +93,8 @@ That starts Dev on the oldest open issue with the `factory-queued` label. If the
 1. In Cursor, say what you want built (for example: "add a clamp helper in clamp/"). The agent creates the issue; it is queued automatically. No label required.
 2. Run **Start factory** (see above). Wait for a PR from `feature/<number>-<slug>` **into `dev`** (opened on push if Dev only pushed a branch). Review starts automatically.
 3. You merge that PR into `dev`.
-4. The factory opens `dev` → `test`, runs Test, then CI. On PASS + green CI it merges into `test` and opens `test` → `main`.
-5. Read Test comments on the main PR. You merge into `main`. That closes the ticket issue (label `factory-done`). After that merge, the next open issue with `factory-queued` starts Dev automatically (same rules as **Start factory**).
+4. The factory opens `dev` → `test`, runs Test, then CI. On PASS + green CI it merges into `test` and opens `test` → `main` (no second Test run).
+5. You merge `test` → `main`. That closes the ticket issue (label `factory-done`). After that merge, the next open issue with `factory-queued` starts Dev automatically (same rules as **Start factory**).
 
 Happy path needs no labels. To retry a failed launch: `agent-dev` on an **issue**; `agent-test`, `agent-review`, `agent-fix`, or `agent-conflict` on a **PR**.
 
