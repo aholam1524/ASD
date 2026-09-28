@@ -119,9 +119,28 @@ Set the environment variable **`REVIEW_PROVIDER`** on the factory dispatcher (fo
 | Value | Behavior |
 | --- | --- |
 | Unset or `cursor` | Review runs as a Cursor cloud agent (default). Requires `CURSOR_API_KEY`. |
-| `claude` | Review is **not** launched in Cursor. The dispatcher adds `agent-review` via the GitHub REST API (using `FACTORY_GITHUB_TOKEN`), posts the usual idempotency marker comment, sets the ticket to `factory-waiting-dev`, and relies on a **Claude review workflow in the app repo (PX)** that runs when the `agent-review` label is added to the PR. If that label cannot be added, the dispatcher Action fails. |
+| `claude` | Review is **not** launched in Cursor. The dispatcher adds `agent-review` via the GitHub REST API (using `FACTORY_GITHUB_TOKEN`), posts the usual idempotency marker comment, sets the ticket to `factory-waiting-dev`, and relies on a **Claude review workflow in the app repo** that runs when the `agent-review` label is added to the PR. If that label cannot be added, the dispatcher Action fails. |
 
-With `REVIEW_PROVIDER=claude`, configure the PX repo with a workflow (for example `anthropics/claude-code-action`) triggered by `agent-review`. Review instructions stay in `factory/prompts/review.md` for that workflow to read.
+`REVIEW_PROVIDER` unset falls back to `AGENT_PROVIDER` below, so setting only `AGENT_PROVIDER=claude` also switches Review.
+
+## Agent provider (dev / test / fix / conflict on Claude instead of Cursor)
+
+Set the environment variable **`AGENT_PROVIDER`** on the factory dispatcher, same place as `REVIEW_PROVIDER`:
+
+| Value | Behavior |
+| --- | --- |
+| Unset or `cursor` | Dev, Test, Fixer, and Conflict all run as Cursor cloud agents (default). Requires `CURSOR_API_KEY`. |
+| `claude` | None of those four launch in Cursor. The dispatcher instead adds the matching label (`agent-dev`, `agent-test`, `agent-fix`, or `agent-conflict`) via the GitHub REST API, posts the usual idempotency marker comment, and sets the normal factory status — exactly the same delegation pattern `REVIEW_PROVIDER=claude` already uses for Review. A **Claude Code workflow in the app repo**, triggered by that label, does the actual work (synchronously, inside that GitHub Actions job, using `CLAUDE_CODE_OAUTH_TOKEN` from a Claude subscription rather than an API key). If the label cannot be added, the dispatcher Action fails. |
+
+Unlike Cursor's cloud agents, Claude Code has no hosted "fire and forget" mode: the app-repo workflow runs `claude` synchronously and doesn't return control until that step finishes (GitHub Actions jobs allow up to 6 hours). The push/PR/comment-marker contracts dispatch.py already relies on (opening the feature PR on push, `<!-- factory:test-result:pass/fail -->`, `factory:conflict-resolved`) are unchanged — the app-repo workflow just needs to produce them itself instead of Cursor's agent doing so.
+
+## Per-ticket release mode (multiple PRs waiting at main at once)
+
+By default (`FACTORY_RELEASE_MODE` unset or `cumulative`), `dev`, `test`, and `main` are singleton branches and there is at most one promotion PR per hop (`dev`→`test`, then `test`→`main`) — tickets accumulate into that one shared PR.
+
+Set **`FACTORY_RELEASE_MODE=per-ticket`** to give each ticket its own path to `main` instead: as soon as a ticket's feature PR merges into `dev`, the dispatcher branches `release/<issue>-<slug>` off the *current* `main`, merges that ticket's feature branch into it, and opens `release/<issue>-<slug>` → `main` as a standalone PR (Test runs on it, same PASS/FAIL contract; CI must be green; merging is always manual, same as `test`→`main` today). Because each release branch is independent, several tickets processed one after another can each end up with their own PR sitting at `main` — mergeable in any order, so you can review and accept several at once instead of one cumulative PR. The shared `dev`→`test`→`main` relay is skipped entirely in this mode (no redundant second Test run); `test` stays unused unless you switch back.
+
+The one-ticket-in-`dev`-at-a-time rule (`skip_dev_if_feature_pr_open`) is unchanged either way — tickets still go through Dev/Review one at a time; this setting only changes what happens once a ticket lands in `dev`.
 
 ## Smoke test
 
