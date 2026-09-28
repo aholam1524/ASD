@@ -41,12 +41,26 @@ LABEL_ROLES = {
     "agent-conflict": "conflict",
 }
 AGENT_ROLE_LABEL_SPECS: dict[str, tuple[str, str]] = {
+    "agent-dev": ("1D76DB", "Retry the Dev cloud agent"),
+    "agent-test": ("0E8A16", "Retry the Test cloud agent"),
     "agent-review": ("5319E7", "Retry the Review cloud agent"),
+    "agent-fix": ("D93F0B", "Retry the Fixer cloud agent"),
+    "agent-conflict": ("FBCA04", "Retry the Conflict cloud agent"),
+}
+# Roles other than "review" that can be delegated to a Claude Code workflow in
+# the app repo (AGENT_PROVIDER=claude) instead of a Cursor cloud agent. Review
+# has its own longer-standing REVIEW_PROVIDER switch and delegation path.
+CLAUDE_DELEGATION_LABELS: dict[str, str] = {
+    "dev": "agent-dev",
+    "test": "agent-test",
+    "fix": "agent-fix",
+    "conflict": "agent-conflict",
 }
 PASS_MARKER = "<!-- factory:test-result:pass -->"
 FAIL_MARKER = "<!-- factory:test-result:fail -->"
 PROMOTE_DEV_TO_TEST = "<!-- factory:promote:dev-to-test -->"
 PROMOTE_TEST_TO_MAIN = "<!-- factory:promote:test-to-main -->"
+PROMOTE_RELEASE_TO_MAIN = "<!-- factory:promote:release-to-main -->"
 FACTORY_QUEUED_LABEL = "factory-queued"
 
 
@@ -69,13 +83,32 @@ def is_factory_author_allowed(owner_repo: str, login: str) -> bool:
     return author in allowed_factory_authors(owner_repo)
 
 
+def agent_provider(role: str) -> str:
+    """Provider for roles other than review: AGENT_PROVIDER=claude delegates
+    dev/test/fix/conflict to a Claude Code workflow in the app repo instead of
+    launching a Cursor cloud agent. `role` is accepted for symmetry with
+    review_provider() and to leave room for a future per-role override."""
+    del role
+    value = os.environ.get("AGENT_PROVIDER", "").strip().lower()
+    return "claude" if value == "claude" else "cursor"
+
+
 def review_provider() -> str:
     value = os.environ.get("REVIEW_PROVIDER", "").strip().lower()
-    if value in {"", "cursor"}:
-        return "cursor"
     if value == "claude":
         return "claude"
+    if value == "":
+        # No review-specific override: fall back to the factory-wide switch.
+        return agent_provider("review")
     return "cursor"
+
+
+def factory_release_mode() -> str:
+    """FACTORY_RELEASE_MODE=per-ticket opts a repo into an independent PR per
+    ticket straight into main (see promote_dev_merge_to_release). Unset or any
+    other value keeps the original cumulative dev -> test -> main behavior."""
+    value = os.environ.get("FACTORY_RELEASE_MODE", "").strip().lower()
+    return "per-ticket" if value == "per-ticket" else "cumulative"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         if base == DEV_BRANCH:
             head_ref = pr.get("headRefName") or (pr.get("head") or {}).get("ref") or ""
             merged = {**pr, "headRefName": head_ref}
+            if factory_release_mode() == "per-ticket":
+                return promote_dev_merge_to_release(owner_repo, repo_url, owner, merged)
             return promote_dev_to_test(owner_repo, repo_url, owner, merged)
         if base == TEST_BRANCH:
             head_ref = pr.get("headRefName") or (pr.get("head") or {}).get("ref") or ""
@@ -575,8 +610,10 @@ def handle_test_fail(owner_repo: str, repo_url: str, number: int) -> int:
 
 
 def is_promotion_pr(base: str, head: str) -> bool:
-    return (base == TEST_BRANCH and head == DEV_BRANCH) or (
-        base == MAIN_BRANCH and head == TEST_BRANCH
+    return (
+        (base == TEST_BRANCH and head == DEV_BRANCH)
+        or (base == MAIN_BRANCH and head == TEST_BRANCH)
+        or (base == MAIN_BRANCH and head.startswith("release/"))
     )
 
 
@@ -835,6 +872,80 @@ def promote_dev_to_test(owner_repo: str, repo_url: str, owner: str, merged_pr: d
     )
 
 
+def release_branch_name(number: int, title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower())
+    slug = slug.strip("-")[:50].strip("-") or "change"
+    return f"release/{number}-{slug}"
+
+
+def promote_dev_merge_to_release(
+    owner_repo: str, repo_url: str, owner: str, merged_pr: dict
+) -> int:
+    """FACTORY_RELEASE_MODE=per-ticket: instead of folding this ticket into the
+    shared dev -> test -> main relay, give it its own branch off the current
+    `main` and its own standalone PR into `main`. Several tickets processed
+    one after another this way can each be sitting at their own main PR at
+    once, mergeable independently and in any order."""
+    feature_branch = merged_pr.get("headRefName") or ""
+    factory_issue = issue_number_from_branch(feature_branch)
+    title = merged_pr.get("title") or feature_branch or f"PR #{merged_pr.get('number')}"
+    branch = release_branch_name(factory_issue or merged_pr["number"], title)
+
+    subprocess.run(["git", "fetch", "origin", MAIN_BRANCH, feature_branch], check=True)
+    subprocess.run(["git", "checkout", "-B", branch, f"origin/{MAIN_BRANCH}"], check=True)
+    merge = subprocess.run(
+        ["git", "merge", "--no-ff", f"origin/{feature_branch}", "-m", f"Merge {feature_branch} into {branch}"],
+        capture_output=True,
+        text=True,
+    )
+    if merge.returncode != 0:
+        subprocess.run(["git", "merge", "--abort"], capture_output=True, text=True)
+        combined = (merge.stdout or "") + (merge.stderr or "")
+        message = (
+            f"Could not fast-track #{merged_pr['number']} to its own `{MAIN_BRANCH}` PR: "
+            f"`{branch}` conflicts with the current `{MAIN_BRANCH}`.\n\n"
+            f"```\n{combined[-2000:]}\n```\n"
+            f"Resolve manually: branch `{branch}` from `{MAIN_BRANCH}`, merge `{feature_branch}` into it, "
+            "push, and open the PR yourself."
+        )
+        if factory_issue is not None:
+            post_comment(owner_repo, factory_issue, message)
+        else:
+            post_comment(owner_repo, merged_pr["number"], message)
+        return 1
+    subprocess.run(["git", "push", "-u", "origin", branch, "--force"], check=True)
+
+    ticket_line = promotion_ticket_line(factory_issue) if factory_issue else ""
+    pr_title = f"Release #{factory_issue}: {title}" if factory_issue else f"Release: {title}"
+    body = (
+        f"{PROMOTE_RELEASE_TO_MAIN}\n"
+        f"Independent release for #{merged_pr['number']} merged into `{DEV_BRANCH}`, "
+        f"branched from current `{MAIN_BRANCH}`. Merge this PR yourself whenever you're ready; "
+        "it does not wait on other tickets.\n"
+        f"{ticket_line}"
+    )
+    pr_number = ensure_promotion_pr(
+        owner_repo,
+        owner,
+        base=MAIN_BRANCH,
+        head=branch,
+        title=pr_title,
+        body=body,
+        marker=PROMOTE_RELEASE_TO_MAIN,
+    )
+    if pr_number is None:
+        print(f"Nothing to release for {branch} (branches are even).")
+        return 0
+    ensure_promotion_pr_has_ticket(owner_repo, pr_number, factory_issue)
+    return launch_role_on_pr(
+        owner_repo,
+        repo_url,
+        "test",
+        pr_number,
+        factory_issue_number=factory_issue,
+    )
+
+
 def promote_test_to_main(
     owner_repo: str, repo_url: str, owner: str, *, merged_pr: dict | None = None
 ) -> int:
@@ -993,6 +1104,53 @@ def claude_review_delegation_comment(marker: str) -> str:
     )
 
 
+def claude_delegation_comment(role: str, marker: str) -> str:
+    label = CLAUDE_DELEGATION_LABELS[role]
+    verb = {"dev": "Dev", "test": "Test", "fix": "Fixer", "conflict": "Conflict"}[role]
+    return (
+        f"{marker}\n"
+        f"**{verb}** delegated to the Claude Code workflow (`AGENT_PROVIDER=claude`).\n\n"
+        f"The `{label}` label triggers the app-repo workflow; no Cursor cloud agent was launched."
+    )
+
+
+def launch_delegated_to_claude(
+    owner_repo: str,
+    role: str,
+    *,
+    number: int,
+    is_pr: bool,
+    marker: str,
+    force: bool,
+    factory_issue_number: int | None,
+) -> int:
+    if not force and comment_has_marker(owner_repo, number, marker):
+        print(f"Already launched {role} for #{number}; skipping")
+        apply_factory_status_for_launch(
+            owner_repo,
+            role,
+            number=number,
+            is_pr=is_pr,
+            factory_issue_number=factory_issue_number,
+        )
+        return 0
+
+    label = CLAUDE_DELEGATION_LABELS[role]
+    if not add_pr_label(owner_repo, number, label):
+        return 1
+
+    post_comment(owner_repo, number, claude_delegation_comment(role, marker))
+    apply_factory_status_for_launch(
+        owner_repo,
+        role,
+        number=number,
+        is_pr=is_pr,
+        factory_issue_number=factory_issue_number,
+    )
+    print(f"Delegated {role} for #{number} to Claude workflow (AGENT_PROVIDER=claude)")
+    return 0
+
+
 def launch_review_delegated_to_claude(
     owner_repo: str,
     *,
@@ -1056,6 +1214,16 @@ def launch_role(
     if role == "review" and review_provider() == "claude":
         return launch_review_delegated_to_claude(
             owner_repo,
+            number=number,
+            is_pr=is_pr,
+            marker=marker,
+            force=force,
+            factory_issue_number=factory_issue_number,
+        )
+    if role in CLAUDE_DELEGATION_LABELS and agent_provider(role) == "claude":
+        return launch_delegated_to_claude(
+            owner_repo,
+            role,
             number=number,
             is_pr=is_pr,
             marker=marker,
