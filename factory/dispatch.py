@@ -891,6 +891,7 @@ def promote_dev_merge_to_release(
     title = merged_pr.get("title") or feature_branch or f"PR #{merged_pr.get('number')}"
     branch = release_branch_name(factory_issue or merged_pr["number"], title)
 
+    ensure_git_identity()
     subprocess.run(["git", "fetch", "origin", MAIN_BRANCH, feature_branch], check=True)
     subprocess.run(["git", "checkout", "-B", branch, f"origin/{MAIN_BRANCH}"], check=True)
     merge = subprocess.run(
@@ -901,13 +902,20 @@ def promote_dev_merge_to_release(
     if merge.returncode != 0:
         subprocess.run(["git", "merge", "--abort"], capture_output=True, text=True)
         combined = (merge.stdout or "") + (merge.stderr or "")
-        message = (
-            f"Could not fast-track #{merged_pr['number']} to its own `{MAIN_BRANCH}` PR: "
-            f"`{branch}` conflicts with the current `{MAIN_BRANCH}`.\n\n"
-            f"```\n{combined[-2000:]}\n```\n"
-            f"Resolve manually: branch `{branch}` from `{MAIN_BRANCH}`, merge `{feature_branch}` into it, "
-            "push, and open the PR yourself."
-        )
+        if is_merge_conflict_error(combined):
+            message = (
+                f"Could not fast-track #{merged_pr['number']} to its own `{MAIN_BRANCH}` PR: "
+                f"`{branch}` conflicts with the current `{MAIN_BRANCH}`.\n\n"
+                f"```\n{combined[-2000:]}\n```\n"
+                f"Resolve manually: branch `{branch}` from `{MAIN_BRANCH}`, merge `{feature_branch}` into it, "
+                "push, and open the PR yourself."
+            )
+        else:
+            message = (
+                f"Could not fast-track #{merged_pr['number']} to its own `{MAIN_BRANCH}` PR "
+                f"(not a merge conflict — see output below):\n\n"
+                f"```\n{combined[-2000:]}\n```"
+            )
         if factory_issue is not None:
             post_comment(owner_repo, factory_issue, message)
         else:
@@ -1561,6 +1569,17 @@ def feature_branch_name(number: int, title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower())
     slug = slug.strip("-")[:50].strip("-") or "change"
     return f"feature/{number}-{slug}"
+
+
+def ensure_git_identity() -> None:
+    """A fresh actions/checkout has no committer identity configured. Only
+    call this before a git operation that creates a commit locally (a plain
+    checkout/fetch/push needs no identity, `git merge --no-ff` does)."""
+    subprocess.run(
+        ["git", "config", "user.email", "factory-bot@users.noreply.github.com"],
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "factory-bot"], check=True)
 
 
 def ensure_branch(branch: str, source: str) -> None:
