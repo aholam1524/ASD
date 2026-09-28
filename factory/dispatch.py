@@ -945,13 +945,20 @@ def promote_dev_merge_to_release(
         print(f"Nothing to release for {branch} (branches are even).")
         return 0
     ensure_promotion_pr_has_ticket(owner_repo, pr_number, factory_issue)
-    return launch_role_on_pr(
+    test_rc = launch_role_on_pr(
         owner_repo,
         repo_url,
         "test",
         pr_number,
         factory_issue_number=factory_issue,
     )
+    # This ticket's feature PR into dev is already merged/closed, so the
+    # one-slot dev lock (skip_dev_if_feature_pr_open) is free again. Start
+    # Dev on the next queued ticket now instead of waiting for this ticket's
+    # own release PR to reach main — that's the point of per-ticket mode:
+    # several tickets can each be sitting at their own main PR at once.
+    next_rc = start_oldest_factory_queued(owner_repo, repo_url)
+    return test_rc or next_rc
 
 
 def promote_test_to_main(

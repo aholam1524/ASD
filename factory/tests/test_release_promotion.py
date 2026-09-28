@@ -55,7 +55,9 @@ class TestPromoteDevMergeToRelease:
             dispatch, "ensure_promotion_pr", return_value=42
         ) as ensure_mock, patch.object(dispatch, "ensure_promotion_pr_has_ticket") as ticket_mock, patch.object(
             dispatch, "launch_role_on_pr", return_value=0
-        ) as launch_mock:
+        ) as launch_mock, patch.object(
+            dispatch, "start_oldest_factory_queued", return_value=0
+        ) as start_next_mock:
             result = promote_dev_merge_to_release("o/r", "https://github.com/o/r", "o", merged)
 
         assert result == 0
@@ -70,12 +72,32 @@ class TestPromoteDevMergeToRelease:
             42,
             factory_issue_number=12,
         )
+        # The dev slot this ticket held is free now; the next queued ticket
+        # starts immediately instead of waiting for this one to reach main.
+        start_next_mock.assert_called_once_with("o/r", "https://github.com/o/r")
         # git fetch/checkout/merge/push all happened via subprocess
         commands = [call.args[0][:2] for call in run_mock.call_args_list]
         assert ["git", "fetch"] in commands
         assert ["git", "checkout"] in commands
         assert ["git", "merge"] in commands
         assert ["git", "push"] in commands
+
+    def test_next_queued_ticket_not_started_when_queue_empty(self) -> None:
+        merged = {
+            "number": 5,
+            "headRefName": "feature/12-add-a-clamp-helper",
+            "title": "Add a clamp helper",
+        }
+
+        with patch.object(dispatch.subprocess, "run", return_value=self._ok()), patch.object(
+            dispatch, "ensure_promotion_pr", return_value=42
+        ), patch.object(dispatch, "ensure_promotion_pr_has_ticket"), patch.object(
+            dispatch, "launch_role_on_pr", return_value=0
+        ), patch.object(dispatch, "oldest_queued_issue", return_value=None) as oldest_mock:
+            result = promote_dev_merge_to_release("o/r", "https://github.com/o/r", "o", merged)
+
+        assert result == 0
+        oldest_mock.assert_called_once()
 
     def test_configures_git_identity_before_merging(self) -> None:
         merged = {
@@ -88,7 +110,7 @@ class TestPromoteDevMergeToRelease:
             dispatch, "ensure_promotion_pr", return_value=42
         ), patch.object(dispatch, "ensure_promotion_pr_has_ticket"), patch.object(
             dispatch, "launch_role_on_pr", return_value=0
-        ):
+        ), patch.object(dispatch, "start_oldest_factory_queued", return_value=0):
             promote_dev_merge_to_release("o/r", "https://github.com/o/r", "o", merged)
 
         commands = [call.args[0] for call in run_mock.call_args_list]
