@@ -183,8 +183,9 @@ def factory_status_for_test_pr(
         ]
     )
     base = pr.get("baseRefName") or ""
-    head = pr.get("headRefName") or ""
-    if base == "main" and head == "test":
+    if base == "main":
+        # Covers both the cumulative test -> main promotion PR and, in
+        # FACTORY_RELEASE_MODE=per-ticket, a per-ticket release/* -> main PR.
         return "factory-waiting-main"
     return "factory-test"
 
